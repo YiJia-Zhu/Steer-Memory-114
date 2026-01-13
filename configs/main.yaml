@@ -1,0 +1,79 @@
+# Main experiment starter config (offline datasets only)
+
+seed: 0
+
+model:
+  name_or_path: "huggingface_models/Qwen2.5-7B-Instruct"
+  tensor_parallel_size: 1
+  enforce_eager: true
+  enable_chunked_prefill: false
+  dtype: "bfloat16"
+  gpu_memory_utilization: 0.6
+
+task:
+  data_root: "datasets"
+  dataset: "gsm8k"
+  train_split: "train"
+  eval_split: "test"
+  max_train_examples: null
+  max_eval_examples: null
+
+prompt:
+  template: "gsm8k_0shot"
+
+decode:
+  temperature: 0.0
+  top_p: 1.0
+  # 普通数据集建议至少 1024，最终更建议 2048
+  max_new_tokens: 2048
+  logprobs: 1
+
+control_points:
+  M: 6
+
+# These are reasonable starting points; tune after quick pre-runs.
+offline_mine:
+  K: 8
+  K_pos: 4
+  K_neg: 4
+  temperature: 0.7
+  top_p: 0.95
+  max_new_tokens: 512
+  eta0: 0.001
+  keep_top_C: 512
+  require_correct_and_incorrect: true
+  min_correct_rollouts: 1
+  min_incorrect_rollouts: 1
+  pos_source: "rollout_or_gold"
+
+offline_select:
+  B: 64
+  lambda_diversity: 0.5
+  epsilon: 0.0001
+  method: "dpp"
+  random_seed: 0
+  min_per_control_point: 1
+
+offline_memory:
+  normalize_keys: true
+
+online:
+  k_retrieve: 16
+  beta: 2.0
+  L: 3
+  probe_tokens: 8
+  rho: 0.1
+  k_scale: 1.0
+  tau_null: 0.0
+  min_sim: 0.0
+  min_entries: 1
+  protocol: "P1"
+  variant: "esm"
+
+eval:
+  methods: ["greedy", "esm"]
+  ablations: ["no_memory", "no_probing"]
+
+outputs:
+  root_dir: "outputs"
+  run_name: "main"

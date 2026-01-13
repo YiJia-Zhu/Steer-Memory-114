@@ -1,0 +1,729 @@
+\documentclass[11pt]{article}
+
+% -------- Packages --------
+\usepackage{amsmath,amssymb,amsfonts,amsthm}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{microtype}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage[hidelinks]{hyperref}
+\usepackage{enumitem}
+\usepackage{geometry}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{verbatim}
+\geometry{margin=1in}
+
+% -------- Theorems --------
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{proposition}{Proposition}
+\newtheorem{remark}{Remark}
+
+% -------- Commands --------
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\1}{\mathbb{I}}
+\newcommand{\Dcal}{\mathcal{D}}
+\newcommand{\Mcal}{\mathcal{M}}
+\newcommand{\Vcal}{\mathcal{V}}
+\newcommand{\Scal}{\mathcal{S}}
+
+\newcommand{\vx}{x}
+\newcommand{\vy}{y}
+\newcommand{\vu}{u}
+\newcommand{\vv}{v}
+\newcommand{\vh}{h}
+\newcommand{\vtheta}{\theta}
+
+\newcommand{\argmax}{\mathrm{arg\,max}}
+\newcommand{\softmax}{\mathrm{softmax}}
+\newcommand{\cosim}{\mathrm{cos}}
+
+% -------- Title --------
+\title{Episodic Steering Memory:\\ Retrieval-Augmented Test-Time Control for Reasoning LLMs}
+\author{Anonymous Authors}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Test-time methods for improving LLM reasoning often trade accuracy for length: sampling and search can increase compute,
+while longer chain-of-thought can drift into unproductive ``overthinking''.
+We propose \textbf{Episodic Steering Memory (ESM)}, a retrieval-augmented controller that performs sparse, interpretable
+activation steering at \emph{control points} during generation.
+ESM treats steering as a retrieval problem over hidden states:
+it stores key--value memory entries mapping full hidden-state keys to correction vectors (plus ``right-state'' keys that map to a null action),
+retrieves the most similar entries at test time, probes a small candidate set with a fixed probe length, and injects with score-scaled strength.
+Offline, ESM mines these entries from contrastive rollouts and selects a compact and diverse memory library.
+Online, ESM improves the accuracy--length frontier by intervening only when beneficial.
+We provide a complete experimental protocol, ablations, and implementation details (including EasySteer integration) to enable reproduction.
+\end{abstract}
+
+\section{Introduction}
+Large language models (LLMs) exhibit strong few-shot and chain-of-thought (CoT) reasoning, but their test-time behavior is brittle:
+a model may underthink (terminate early), overthink (produce long but wrong derivations), or drift into irrelevant branches.
+Test-time methods---self-consistency, best-of-$N$, tree search, verifiers---can improve accuracy but often require significant extra compute.
+Meanwhile, \emph{activation steering} offers a lightweight alternative: add a direction vector to internal activations to bias behavior
+without weight updates.
+
+This paper asks: \emph{can we steer an LLM's reasoning trajectory at test time, in a way that is conditional on the current internal state,
+computationally practical, and robust to overthinking?}
+A central challenge is that a single global steering vector is rarely optimal: the same prompt can require different interventions at
+different stages (e.g., ``be concise'' vs.\ ``re-check arithmetic'').
+We therefore propose \textbf{Episodic Steering Memory (ESM)}:
+\begin{itemize}[leftmargin=*]
+  \item ESM mines state-conditioned correction vectors from contrastive rollouts and selects a compact diverse \emph{memory library}.
+  \item ESM stores full hidden-state keys (no projection) with their associated correction vectors, including ``right-state'' keys that map to a null action.
+  \item At test time, ESM retrieves similar past states, probes a small candidate set with a fixed probe length, and injects with score-scaled strength.
+\end{itemize}
+ESM is designed to improve the accuracy--length frontier while using only a few sparse interventions and modest probing overhead.
+
+\section{Preliminaries: Activation Steering at Control Points}
+
+\subsection{Base model and frozen decoding}
+Let $p_{\vtheta}$ be a pretrained autoregressive language model with parameters $\vtheta$.
+We assume \emph{frozen} test-time decoding: parameters are fixed, and we only intervene through activation modifications.
+
+\subsection{Steering operator}
+Let $\vh_t^{(\ell)}\in\R^{d}$ denote the residual-stream activation at token position $t$ and layer $\ell$.
+A steering tool $b=(\vv_b,\ell_b,\alpha_b)$ applies
+\begin{equation}
+\Scal_{\ell_b,t}(\vh_t^{(\ell_b)};\vv_b,\alpha_b) := \vh_t^{(\ell_b)} + \alpha_b \vv_b.
+\end{equation}
+We apply steering at a \emph{single} token position per control point to keep interventions sparse and interpretable.
+
+\subsection{Control points and segments}
+\label{sec:control_points}
+We partition generation into segments separated by control points:
+\begin{equation}
+\vy = [\vy^{(1)}, \vy^{(2)}, \dots, \vy^{(M)}],
+\end{equation}
+where $\vy^{(m)}$ are tokens generated between control points $m-1$ and $m$.
+In this paper we use a \textbf{deterministic} control-point rule to eliminate ambiguity:
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Delimiter control points (default):} define a delimiter token sequence (we use the blank line marker ``\texttt{\textbackslash n\textbackslash n}'' to match step-formatted reasoning) and cut each segment at its first occurrence. We still cap a segment by a maximum of $L_{\mathrm{seg}}$ tokens to avoid runaway generations when the delimiter is absent.
+  \item \textbf{Token-interval control points (optional):} choose a segment length $L_{\mathrm{seg}}$ and set $t_m = m\cdot L_{\mathrm{seg}}$
+  (clipped by termination). This aligns control points across rollouts and works for any task; we keep it as a fallback.
+\end{itemize}
+All experiments in Section~\ref{sec:experiments} use the delimiter rule unless otherwise stated.
+
+\section{Problem Setup}
+We study test-time control for discrete-answer reasoning tasks.
+Each instance $\vx$ is a prompt and has a ground-truth answer $a(\vx)$.
+A generation $\vy$ receives a terminal reward $R(\vx,\vy)\in\{0,1\}$ indicating answer correctness.
+To reflect the common accuracy--length tradeoff, we define a length-regularized reward
+\begin{equation}
+R_{\eta}(\vx,\vy) := R(\vx,\vy) - \eta \cdot \frac{|\vy|}{T_{\max}},
+\label{eq:online_obj}
+\end{equation}
+where $|\vy|$ is the number of generated tokens and $T_{\max}$ is a max-new-tokens budget.
+
+We aim to improve the \emph{frontier} of accuracy vs.\ length by steering at control points.
+At each control point $m$, the controller uses the current hidden state as a retrieval key and chooses either a correction vector or the null (no steering) action.
+The controller then generates the next segment and repeats.
+
+\section{Episodic Steering Memory}
+ESM is constructed in three offline stages: (i) mine state-conditioned correction vectors from contrastive rollouts,
+(ii) select a compact and diverse memory library, and (iii) build a retrieval index over full hidden-state keys (no dimensionality reduction).
+
+\subsection{Stage I: Mining candidate memory entries}
+\paragraph{Goal.}
+Mine a large pool of candidate memory entries $\widetilde{\Mcal}=\{(\vh_i,\vv_i,Q_i,\ell_i,m_i)\}_{i=1}^{C}$, where each entry stores
+a \emph{key} hidden state $\vh_i$ (for similarity matching) and a \emph{value} correction vector $\vv_i$ to inject at layer $\ell_i$ for control point $m_i$.
+
+\paragraph{Contrastive state differences.}
+For each training instance $\vx\in \Dcal$, generate $K$ rollouts $\{\vy^{(k)}\}_{k=1}^K$ and rewards $R_{\eta_0}^{(k)}$.
+Let positives $\mathcal{P}$ be correct rollouts (or gold when needed) and negatives $\mathcal{N}$ be incorrect rollouts.
+For each control point $m$ and each layer $\ell$ in a candidate layer set $\mathcal{L}$, compute mean states
+\begin{equation}
+\bar{\vh}^{(\ell)}_{P}(\vx,m) := \frac{1}{|\mathcal{P}|}\sum_{k\in\mathcal{P}} \vh_{t_m}^{(\ell)}(\vx,\vy^{(k)}),
+\qquad
+\bar{\vh}^{(\ell)}_{N}(\vx,m) := \frac{1}{|\mathcal{N}|}\sum_{k\in\mathcal{N}} \vh_{t_m}^{(\ell)}(\vx,\vy^{(k)}).
+\label{eq:contrastive}
+\end{equation}
+We define the raw correction vector $\vv^{(\ell)}(\vx,m) := \bar{\vh}^{(\ell)}_{P}(\vx,m) - \bar{\vh}^{(\ell)}_{N}(\vx,m)$ and store two entries:
+(i) $(\bar{\vh}^{(\ell)}_{N}(\vx,m), \vv^{(\ell)}(\vx,m))$ (error-keyed correction) and
+(ii) $(\bar{\vh}^{(\ell)}_{P}(\vx,m), \mathbf{0})$ (correct-keyed null action).
+
+\paragraph{Quality score.}
+We score a candidate by the reward gap between positives and negatives (no dependence on $\|\vv\|$):
+\begin{equation}
+Q(\vx,m) := \bar{R}_{P}(\vx,m) - \bar{R}_{N}(\vx,m),
+\end{equation}
+where $\bar{R}_{P}$ and $\bar{R}_{N}$ are averages of $R_{\eta_0}$ over $\mathcal{P}$ and $\mathcal{N}$.
+
+\subsection{Stage II: Selecting a compact and diverse memory library}
+\paragraph{Goal.}
+Select a subset $S\subseteq \widetilde{\Mcal}$ of size $B$ that is both high-quality and diverse.
+We define a similarity kernel between key hidden states (not correction vectors),
+and maximize the quality+diversity surrogate:
+\begin{equation}
+\max_{S:\,|S|=B}\ \sum_{i\in S} \log(1+Q_i)\;+\;\lambda \log\det\big(K_S + \epsilon I\big),
+\label{eq:dpp_obj}
+\end{equation}
+where $K_S$ is the submatrix indexed by $S$ and $K_{ij}=\vh_i^\top \vh_j$ uses key hidden states.
+The log-determinant term encourages a spread of keys, hedging against multi-modal failure modes.
+We optimize Eq.~\eqref{eq:dpp_obj} via a greedy algorithm (Appendix~\ref{app:dpp_greedy}).
+
+\subsection{Stage III: Building the episodic memory index}
+\paragraph{Goal.}
+Build an episodic memory $\Mcal$ consisting of key--value entries $(\vh_i,\vv_i,Q_i,\ell_i,m_i)$ from the selected library.
+This stage is purely an indexing step: it stores the full hidden-state keys for similarity search and the associated correction vectors for injection.
+
+\section{Online Control: Similarity Retrieval and Tool Probing}
+At test time, at each control point $m$, ESM computes the current hidden-state key $\vh_m$ and retrieves the $k$ most similar
+memory entries using a vector index:
+\begin{equation}
+\mathcal{N}_k(\vh_m) := \mathrm{TopK}(\vh_m;\Mcal).
+\label{eq:topk}
+\end{equation}
+For each retrieved entry $i$ with key $\vh_i$ and quality $Q_i$, we define a similarity-weighted score
+\begin{equation}
+\widehat{A}_i := \cosim(\vh_m,\vh_i)\cdot Q_i.
+\end{equation}
+Entries with $\vv_i=\mathbf{0}$ act as evidence for the null action and are merged into the null branch.
+
+\paragraph{Tool probing.}
+For each candidate correction, we probe a short fixed-length continuation and compute
+\begin{equation}
+\mathrm{Score}_i := \beta\cdot \widehat{A}_i + \rho\cdot \big(\logprob_i - \logprob_{\mathrm{null}}\big),
+\label{eq:accept_score}
+\end{equation}
+where the logprob difference acts as a confidence proxy (Appendix~\ref{app:conf}).
+We inject the chosen correction at the control point with \emph{score-scaled} strength,
+\begin{equation}
+\vh \leftarrow \vh + k\cdot \mathrm{Score}_i \cdot \vv_i,
+\end{equation}
+and then generate the next segment.
+
+\begin{algorithm}[t]
+\caption{ESM online control (one instance)}
+\label{alg:online}
+\begin{algorithmic}[1]
+\State Initialize prefix with the rendered prompt; set $m\leftarrow 1$
+\While{not terminated and tokens $< T_{\max}$ and $m\le M$}
+  \State Compute key state $\vh_m$
+  \State Retrieve $\mathcal{N}_k(\vh_m)$ by Eq.~\eqref{eq:topk}; compute $\widehat{A}_i$ for retrieved entries
+  \State Form a candidate list of top-$L$ corrections and the null action (entries with $\vv_i=\mathbf{0}$ merge into null)
+  \For{each candidate $i$ (and null)}
+    \State Probe a short continuation and compute $\mathrm{Score}_i$ by Eq.~\eqref{eq:accept_score}
+  \EndFor
+  \State Choose the best-scoring candidate; if $\max_i \mathrm{Score}_i<\tau_{\mathrm{null}}$ choose null
+  \State Apply correction with strength $k\cdot \mathrm{Score}_i$ and generate the next segment; set $m\leftarrow m+1$
+\EndWhile
+\end{algorithmic}
+\end{algorithm}
+
+\section{Implementation Notes and Complexity}
+\paragraph{Steering framework.}
+ESM requires a steering implementation that can (i) read residual activations at a specified layer and control-point token, and
+(ii) add a vector scaled by $\alpha$ at that location.
+In Appendix~\ref{app:easysteer}, we provide a concrete implementation path using EasySteer (a vLLM-based steering framework)
+(compatible with \texttt{direct} vector addition and per-position triggers).
+
+\paragraph{Compute overhead.}
+Let $M$ be the number of control points and $L$ the number of probed tools per control point.
+ESM generates at most $(L+1)$ segments per control point (including null), so the worst-case generation overhead is roughly
+a factor of $(L+1)$ on the segmented portion of decoding.
+In practice, we keep $M$ small (e.g., $4$--$8$) and $L$ very small (e.g., $2$--$4$), making the controller practical.
+
+\paragraph{Practical defaults.}
+Stable defaults include neighborhood size $k\in[8,32]$, candidates $L\in[2,4]$, probe length $T_{\mathrm{probe}}\in[4,8]$,
+and a blank-line delimiter (``\texttt{\textbackslash n\textbackslash n}'').
+We use cosine similarity on L2-normalized keys for retrieval; correction vectors are kept raw (unnormalized) and scaled online via $k\cdot \mathrm{Score}_i$.
+
+\section{Experiments}
+\label{sec:experiments}
+We design experiments to (i) test whether ESM improves reasoning accuracy under \emph{matched decoding budgets}, (ii) verify that the gains are not merely due to extra compute,
+and (iii) isolate which components (mined tools, diversity selection, episodic memory, online probing) matter most.
+Because ESM is a \emph{test-time} method, our comparisons emphasize \textbf{fairness under equal budgets} rather than absolute scores.
+
+\subsection{Benchmarks, models, and metrics}
+\paragraph{Benchmarks.}
+We evaluate on a standard suite of discrete-answer reasoning tasks:
+GSM8K and SVAMP (numeric), MATH (symbolic/numeric), ARC-Challenge (multiple-choice), and StrategyQA (yes/no).
+All evaluation is automatic via deterministic answer extraction (Appendix~\ref{app:evaluators}).
+
+\paragraph{Models.}
+To demonstrate that ESM is not model-specific, we recommend reporting at least two instruction-tuned LLMs:
+a \textbf{7--8B} model (e.g., Qwen2.5-7B-Instruct or Llama-3.1-8B-Instruct) and a \textbf{13--14B} model (e.g., Qwen2.5-14B-Instruct).
+For each model, we report results with the same ESM hyperparameters whenever feasible, and tune only the score-scale hyperparameter $k$ when needed.
+
+\paragraph{Metrics.}
+For each dataset we report:
+(i) Accuracy, (ii) average committed generated tokens, and (iii) (for ESM) probe overhead tokens (and optionally total generated tokens).
+
+\subsection{Token accounting and compute}
+\label{sec:fairness}
+ESM spends extra tokens during \emph{tool probing} (Online Control section).
+In our implementation, all methods share the same max-new-tokens $T_{\max}$ for the committed answer, while ESM additionally generates fixed-length probes ($T_{\mathrm{probe}}$) for at most $L$ candidates per control point.
+We report committed tokens and probe overhead separately.
+
+\subsection{Baselines}
+We compare ESM to strong test-time methods that do not modify model weights:
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Greedy-CoT}: greedy decoding with a standard chain-of-thought prompt.
+  \item \textbf{Best-of-$N$}: sample $N$ complete solutions; select using (i) final-answer consistency or (ii) a verifier LM.
+  \item \textbf{Self-Consistency}: majority vote over $N$ sampled solutions (numeric / categorical tasks).
+  \item \textbf{Prompt-only heuristics}: length penalty and ``be concise'' / ``double-check'' prompt variants.
+  \item \textbf{Static steering}: apply a single global steering vector (chosen on a dev set) at every control point (no retrieval/memory).
+  \item \textbf{ESM ablations}: remove one component at a time (Section~\ref{sec:ablations}).
+\end{itemize}
+Exact hyperparameters and prompts are specified in Appendix~\ref{app:prompts}.
+
+\subsection{Main results}
+\label{sec:main_results}
+Table~\ref{tab:main_results} is the primary evidence: accuracy under matched budgets and models.
+We recommend reporting results at $T_{\max}=512$ (main table) and placing additional budgets in the appendix.
+
+\begin{table*}[t]
+\centering
+\caption{Main results: accuracy (\%) under a matched max-new-tokens budget ($T_{\max}=512$).
+Fill in the numbers after running the provided evaluation scripts.}
+\label{tab:main_results}
+\small
+\begin{tabular}{lcccccc}
+\toprule
+Method & GSM8K & SVAMP & MATH & ARC-C & StrategyQA & Avg \\
+\midrule
+Greedy-CoT & -- & -- & -- & -- & -- & -- \\
+Self-Consistency ($N$ matched) & -- & -- & -- & -- & -- & -- \\
+Best-of-$N$ (rerank, $N$ matched) & -- & -- & -- & -- & -- & -- \\
+Prompt-only heuristics & -- & -- & -- & -- & -- & -- \\
+Static steering (global vector) & -- & -- & -- & -- & -- & -- \\
+\midrule
+ESM (ours) & -- & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Overthinking mitigation}
+A core motivation of ESM is to \emph{intervene only when needed} and prevent the model from drifting into unproductive long reasoning.
+We analyze this behavior using per-instance diagnostics (token usage, truncation rates, null/tool usage) and case studies.
+
+\subsection{Ablations and analysis}
+\label{sec:ablations}
+We isolate contributions of (i) mined tools, (ii) diversity selection, (iii) episodic memory, and (iv) probing.
+
+\paragraph{Component ablations.}
+We report the following variants on a representative dataset (GSM8K and MATH) under $T_{\max}=512$:
+\begin{itemize}[leftmargin=*]
+  \item \textbf{No memory}: disable retrieval and always take the null action (no steering).
+  \item \textbf{No probing}: select the entry with the largest retrieved $\widehat{A}_i$ and commit without probing.
+  \item \textbf{No DPP diversity}: build the library by selecting top-$B$ entries by quality $Q$ (Stage I).
+  \item \textbf{Random library}: select $B$ tools uniformly at random from the mined pool.
+  \item \textbf{Single control point}: allow only one intervention at $m=1$ (tests whether ESM is more than ``one-shot steering'').
+\end{itemize}
+
+\paragraph{Sensitivity to library size and probing width.}
+We vary $B\in\{16,32,64,128\}$ and probing width $L\in\{0,1,3,5\}$ (with $L{=}0$ meaning no probing).
+We recommend plotting accuracy and token cost as a function of $B$ and $L$ (place full grids in the appendix).
+
+\begin{table}[t]
+\centering
+\caption{Ablation summary template (report on GSM8K, $T_{\max}=512$).}
+\label{tab:ablation}
+\small
+\begin{tabular}{lcc}
+\toprule
+Variant & Acc (\%) & Tokens / inst. \\
+\midrule
+ESM (full) & -- & -- \\
+No memory & -- & -- \\
+No probing ($L{=}0$) & -- & -- \\
+No DPP diversity & -- & -- \\
+Random library & -- & -- \\
+Single control point & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Interpretability.}
+We report (i) the frequency of chosen tools across control points and datasets, and (ii) a 2D PCA plot of tool vectors.
+We include 3--5 qualitative case studies showing how different retrieved tools correspond to behaviors such as ``be concise'',
+``re-check arithmetic'', or ``consider alternative hypothesis'' (full examples in the appendix).
+
+\subsection{Implementation and reproducibility}
+All experiments use the same prompting templates (Appendix~\ref{app:prompts}) and default hyperparameters (Appendix~\ref{app:hyperparams}).
+We implement test-time steering via EasySteer (Appendix~\ref{app:easysteer}) and release scripts that:
+(i) generate offline rollouts,
+(ii) mine and export tool vectors,
+(iii) build the episodic memory, and
+(iv) run evaluation with fixed $T_{\max}$ and per-instance logging of committed tokens and probe overhead.
+
+\section{Limitations and Discussion}
+ESM is a test-time control method and inherits limitations of steering and retrieval.
+First, steering directions mined from a finite dataset may not generalize to all distributions.
+Second, probing increases compute; although $L$ is small, worst-case overhead can still be non-trivial.
+Third, activation steering can cause unintended side effects (style drift, refusals, or hallucinations) if scale is too large.
+We mitigate these issues with sparse control points, score-scaled injection, a null action supported by ``right-state'' matches, and matched-budget evaluation.
+
+\section{Related Work}
+We relate ESM to (i) test-time compute methods (self-consistency, verifiers, search),
+(ii) activation steering and representation engineering, and (iii) retrieval-augmented control and episodic memory.
+We leave a full literature discussion to the final submission.
+
+\section{Conclusion}
+We introduced Episodic Steering Memory, a retrieval-augmented controller that performs conditional activation steering at control points.
+ESM mines a diverse memory library of state-conditioned corrections offline, builds a retrieval index over full hidden-state keys, and probes a small candidate set online.
+We provide a complete experimental protocol and implementation details to enable reproduction and future work on controllable reasoning.
+
+% ============================
+%            APPENDIX
+% ============================
+\appendix
+
+\section{Scale selection details}
+\label{app:scale}
+\paragraph{Score-scaled injection.}
+We do not perform an offline calibration grid or normalize correction vectors.
+Instead, we keep $\vv$ as the raw state difference (Eq.~\eqref{eq:contrastive}) and scale injection online using the probing score:
+$\vh \leftarrow \vh + k\cdot \mathrm{Score}_i\cdot \vv_i$,
+where $k$ is a hyperparameter and $\mathrm{Score}_i$ is defined in Eq.~\eqref{eq:accept_score}.
+
+\section{Greedy optimization for Eq.~\eqref{eq:dpp_obj}}
+\label{app:dpp_greedy}
+We optimize the quality+diversity objective with a greedy forward selection:
+start from $S=\emptyset$ and iteratively add the element that maximizes the marginal gain of Eq.~\eqref{eq:dpp_obj}.
+We maintain the determinant increment efficiently via Cholesky updates on the kernel submatrix.
+
+\section{Tool prototypes for fast candidate selection}
+\label{app:tool_prototypes}
+In large libraries, we optionally cluster tools and maintain a small set of prototypes to reduce retrieval cost.
+We use k-means on normalized tool vectors and store cluster centroids as prototypes.
+At test time, we first score prototypes, then sample tools from top clusters.
+
+\section{Confidence proxy}
+\label{app:conf}
+We use the (length-normalized) log-probability of the probed segment under the steered model as a confidence proxy.
+This helps avoid committing low-likelihood segments that may arise from overly strong steering.
+
+\section{Prompt templates and control-point settings}
+\label{app:prompts}
+This section removes ambiguity by specifying the exact prompting format used in experiments.
+
+\paragraph{Common system prompt (if applicable).}
+\begin{verbatim}
+You are a helpful assistant. Follow the user's instructions carefully.
+\end{verbatim}
+
+\paragraph{Chat-format wrapper.}
+For chat models, we wrap each task prompt into the model's native chat template (e.g., Qwen/Llama).
+When using vLLM, we recommend applying the tokenizer's chat template to obtain the final string.
+
+\paragraph{GSM8K / SVAMP (0-shot).}
+\begin{verbatim}
+Solve the following problem step by step.
+Return the final numeric answer on the last line in the format:
+#### <answer>
+
+Problem:
+{QUESTION}
+\end{verbatim}
+
+\paragraph{MATH (0-shot).}
+\begin{verbatim}
+Solve the following problem carefully.
+You may show intermediate steps.
+Put the final answer in \boxed{<final answer>} on the last line.
+
+Problem:
+{QUESTION}
+\end{verbatim}
+
+\paragraph{ARC-Challenge (multiple choice).}
+\begin{verbatim}
+Choose the correct option (A, B, C, or D).
+Briefly explain your reasoning.
+Put only the chosen letter on the last line in the format:
+#### <A/B/C/D>
+
+Question:
+{QUESTION}
+
+Options:
+(A) {A}
+(B) {B}
+(C) {C}
+(D) {D}
+\end{verbatim}
+
+\paragraph{StrategyQA.}
+\begin{verbatim}
+Answer the question with Yes or No.
+Put only the final label on the last line in the format:
+#### <Yes/No>
+
+Question:
+{QUESTION}
+\end{verbatim}
+
+\paragraph{Control-point schedule (default).}
+We use delimiter-based control points with a blank-line delimiter (``\texttt{\textbackslash n\textbackslash n}'').
+Let $L_{\mathrm{seg}}$ be a hard cap on segment length (in \emph{newly generated tokens}).
+During generation, cut the current segment at the first generated delimiter; if no delimiter appears before $L_{\mathrm{seg}}$ tokens, cut at $L_{\mathrm{seg}}$.
+Control point $m$ is placed immediately after this cut. We stop at the earliest of: (i) EOS, (ii) reaching $T_{\max}$ total new tokens, or (iii) reaching $M$ control points.
+
+\paragraph{Token-interval control points (fallback).}\label{app:delim_cps}
+For tasks without reliable delimiters, we fall back to the token-interval rule:
+control point $m$ occurs right after generating exactly $m\cdot L_{\mathrm{seg}}$ tokens since the start of the assistant response.
+Maintain a running counter of generated token IDs; once the counter hits a multiple of $L_{\mathrm{seg}}$ and the model has not terminated,
+pause generation, extract the state embedding, and invoke Algorithm~\ref{alg:online}.
+
+\section{Offline rollout generation details}
+\label{app:offline_rollouts}
+\paragraph{Stage I rollouts.}
+To mine contrastive directions, we require diversity across rollouts.
+Use stochastic decoding with temperature $0.7$, top-$p=0.95$, and a max token budget $T_{\max}^{\mathrm{mine}}$ (e.g., 512).
+Generate $K$ rollouts per prompt with different random seeds.
+
+\paragraph{Stage III indexing.}
+Stage III builds a retrieval index from the selected library and does not require additional rollouts.
+
+\paragraph{Control-point alignment.}
+Keys are extracted at the last token of the prefix up to the control-point delimiter.
+Online retrieval uses the same control-point definition so mined keys match test-time keys.
+
+\section{Memory index and retrieval implementation}
+\label{app:retrieval_impl}
+We store each memory entry as $(\vh_i,\vv_i,Q_i,\ell_i,m_i)$ where $\vh_i\in\R^{d}$ is a full hidden-state key.
+We recommend inner-product search on L2-normalized keys (cosine similarity). For large memories, approximate ANN (e.g., FAISS) can be used.
+
+\section{Evaluators and answer extraction rules}
+\label{app:evaluators}
+We use deterministic, fully specified post-processing so that results are reproducible and comparable across methods.
+All evaluators operate on the \emph{final assistant message} (no access to hidden states).
+
+\paragraph{Common normalization.}
+We lowercase for label tasks, strip surrounding whitespace, and remove trailing punctuation.
+For numeric tasks, we also remove thousands separators (commas) and standardize minus signs.
+
+\paragraph{GSM8K / SVAMP (numeric exact match).}
+We extract the answer from the last line matching \texttt{\#\#\#\#}:
+\begin{itemize}[leftmargin=*]
+  \item Regex: \texttt{r"####\s*([-+]?\d[\d,]*\.?\d*)"}.
+  \item Normalization: remove commas; cast to Python \texttt{Decimal} (or float if needed); compare exact string after canonicalization.
+  \item If no \texttt{####} line exists, fall back to the last number in the response.
+\end{itemize}
+
+\paragraph{MATH (symbolic equivalence when possible).}
+We first try to extract a LaTeX-boxed answer:
+\begin{itemize}[leftmargin=*]
+  \item Regex: \texttt{r"\\boxed\{([^}]*)\}"} (take the last match).
+  \item If absent, fall back to the last \texttt{####} line using the GSM8K regex.
+\end{itemize}
+For equivalence, we recommend using a standard symbolic checker (e.g., \texttt{sympy} with \texttt{latex2sympy} or \texttt{math\_verify})
+and reporting both (i) exact-string accuracy and (ii) symbolic accuracy.
+If symbolic parsing fails, we fall back to exact string match after whitespace removal.
+
+\paragraph{ARC-Challenge (multiple choice).}
+We extract the final option letter from the last \texttt{####} line:
+\begin{itemize}[leftmargin=*]
+  \item Regex: \texttt{r"####\s*([ABCDE])"}.
+  \item If absent, fall back to the last standalone capital letter in \{A,B,C,D,E\}.
+\end{itemize}
+
+\paragraph{StrategyQA (yes/no).}
+We extract from the last \texttt{####} line:
+\begin{itemize}[leftmargin=*]
+  \item Regex: \texttt{r"####\s*(yes|no)"} (case-insensitive).
+  \item If absent, fall back to the last occurrence of ``yes'' or ``no''.
+\end{itemize}
+
+\paragraph{Reportable statistics.}
+For each benchmark, we report:
+(i) Accuracy, (ii) average generated tokens, and (iii) token-normalized accuracy (Acc per 1k generated tokens).
+
+\section{Concrete implementation using EasySteer (vLLM-based steering)}
+\label{app:easysteer}
+This appendix provides a concrete implementation recipe for ESM using \texttt{EasySteer}, a vLLM-based framework that supports steering vectors at inference time.
+We use the \textbf{direct} algorithm (vector addition), matching the steering operator in Section~2.
+
+\subsection{Installation}
+EasySteer is distributed as a Git repository with a vLLM submodule. A typical installation flow is:
+
+\begin{verbatim}
+conda create -n easysteer python=3.10 -y
+conda activate easysteer
+
+git clone --recurse-submodules https://github.com/ZJU-REAL/EasySteer.git
+cd EasySteer/vllm-steer
+VLLM_USE_PRECOMPILED=1 pip install --editable .
+
+cd ..
+pip install --editable .
+\end{verbatim}
+
+If the precompiled wheel is unavailable for your system, build-from-source instructions are provided in the EasySteer README.
+
+\subsection{Model initialization (inference mode)}
+EasySteer recommends enabling steering and forcing eager execution:
+\begin{verbatim}
+from vllm import LLM, SamplingParams
+
+llm = LLM(
+  model="Qwen/Qwen2.5-7B-Instruct",
+  enable_steer_vector=True,
+  enforce_eager=True,
+  enable_chunked_prefill=False,
+  tensor_parallel_size=1,
+)
+\end{verbatim}
+
+\subsection{Applying a steering vector during generation}
+In EasySteer, a steering vector is applied via a \texttt{SteerVectorRequest}:
+\begin{verbatim}
+from vllm.steer_vectors.request import SteerVectorRequest
+
+req = SteerVectorRequest(
+  steer_vector_name="tool_17",
+  steer_vector_int_id=17,
+  steer_vector_local_path="vectors/tool_17_delta.pt",
+  scale=1.5,
+  target_layers=[20,21,22,23,24,25,26,27,28,29,30,31],
+  prefill_trigger_tokens=[-1],     # -1: apply to all prompt tokens (optional)
+  generate_trigger_tokens=[-1],    # -1: apply to all generated tokens
+)
+
+params = SamplingParams(temperature=0.0, max_tokens=128)
+out = llm.generate(["<prompt string>"], sampling_params=params,
+                   steer_vector_request=req)
+text = out[0].outputs[0].text
+\end{verbatim}
+\noindent
+For \emph{position-specific} interventions (e.g., apply only at the last prompt token), EasySteer also supports trigger \emph{positions} via \texttt{VectorConfig}
+(see the README's multi-vector example); we use this mode in an ablation on ``prompt-end injection''.
+
+\subsection{Segmented generation for ESM}
+ESM requires pausing at control points, probing candidates for the next segment, and committing one segment.
+A simple, robust implementation is to run vLLM in a loop, each time generating a short segment of length $L_{\mathrm{seg}}$:
+\begin{verbatim}
+prefix = rendered_prompt_string
+for m in range(M):
+  # build req_m from the selected tool for this step (or null tool)
+  params = SamplingParams(temperature=0.0, max_tokens=L_seg)
+  seg = llm.generate([prefix], sampling_params=params,
+                     steer_vector_request=req_m)[0].outputs[0].text
+  prefix = prefix + seg
+  if "<eos>" in seg: break
+\end{verbatim}
+\noindent
+In our codebase, we log committed tokens and probe overhead separately (and can also report total generated tokens, including discarded probes).
+
+\subsection{Extracting hidden states for mining}
+EasySteer provides a hidden-state extraction utility based on vLLM's embed mode:
+\begin{verbatim}
+import easysteer.hidden_states as hs
+from vllm import LLM
+
+llm_embed = LLM(
+  model="Qwen/Qwen2.5-7B-Instruct",
+  task="embed",
+  tensor_parallel_size=1,
+  enforce_eager=True,
+  enable_chunked_prefill=False,
+  enable_prefix_caching=False,
+)
+
+prompts = [
+  "What are the future trends in artificial intelligence?",
+  "Explain the basic principles of quantum computing",
+  "How to effectively learn a new language",
+]
+all_hidden_states, outputs = hs.get_all_hidden_states(llm_embed, prompts)
+# all_hidden_states: list[sample][layer][token] -> torch.Tensor
+\end{verbatim}
+
+\subsection{Mining and exporting memory entries (mean state-diff)}
+In our implementation we compute mean positive/negative states at the control point and store raw deltas (no normalization) as float32 \texttt{.pt} files:
+\begin{verbatim}
+import numpy as np
+import torch
+
+h_pos = ...  # mean correct state at (m, layer), shape (d,)
+h_neg = ...  # mean incorrect state at (m, layer), shape (d,)
+delta = h_pos - h_neg
+
+torch.save(delta.astype(np.float32), "vectors/pair_00017_delta.pt")
+torch.save(h_neg.astype(np.float32), "keys/pair_00017_wrong.pt")
+torch.save(h_pos.astype(np.float32), "keys/pair_00017_right.pt")
+\end{verbatim}
+\noindent
+In ESM, \texttt{positive\_indices} correspond to successful rollouts and \texttt{negative\_indices} to failed rollouts at the same control point.
+
+\subsection{Batching tips}
+To reduce overhead:
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Probe in a batch:} at each control point, create $L{+}1$ prompts (same prefix) and call \texttt{llm.generate} once with a list input.
+  \item \textbf{Reuse tokenization:} cache token IDs for prompt prefixes when possible (EasySteer supports KV-cache in its v1 adaptation).
+  \item \textbf{Keep segments short:} $L_{\mathrm{seg}}\in[32,128]$ is usually sufficient; longer segments reduce control granularity.
+\end{itemize}
+
+\section{Default hyperparameters (recommended starting point)}
+\label{app:hyperparams}
+This section provides a concrete configuration that is (i) strong enough to show gains in preliminary experiments,
+and (ii) cheap enough to iterate on during development.
+Unless otherwise stated, all hyperparameters are shared across datasets.
+
+\paragraph{Control points.}
+\begin{itemize}[leftmargin=*]
+  \item Control-point rule: delimiter (Section~\ref{sec:control_points}), using the blank-line marker ``\texttt{\textbackslash n\textbackslash n}''.
+  \item Max control points: $M=6$ (generation may continue until $T_{\max}$).
+\end{itemize}
+
+\paragraph{Offline mining (Stage I).}
+\begin{itemize}[leftmargin=*]
+  \item Rollouts per prompt: $K=8$ with temperature $0.7$, top-$p=0.95$.
+  \item Pos/neg sets: $K_+=4$, $K_-=4$ (correct vs.\ incorrect) using reward $R_{\eta_0}$ with $\eta_0=0.001$; quality $Q=\bar{R}_P-\bar{R}_N$.
+  \item Candidate layers: top third of layers (e.g., layers 20--31 in a 32-layer model).
+  \item Candidate pool size: keep top $C=512$ candidates by quality before diversity selection.
+\end{itemize}
+
+\paragraph{Library selection (Stage II).}
+\begin{itemize}[leftmargin=*]
+  \item Library size: $B=64$ memory entries (increase to $128$ for 13--14B models).
+  \item DPP tradeoff: $\lambda=0.5$, $\epsilon=10^{-4}$ (see Appendix~\ref{app:dpp_greedy}).
+\end{itemize}
+
+\paragraph{Episodic memory (Stage III).}
+\begin{itemize}[leftmargin=*]
+  \item Index: store full hidden-state keys (L2-normalized) and associated correction vectors (raw deltas, plus null entries with $\vv=\mathbf{0}$).
+\end{itemize}
+
+\paragraph{Online control.}
+\begin{itemize}[leftmargin=*]
+  \item Retrieval neighbors: $k=16$ (top-$k$ by cosine similarity on keys).
+  \item Candidate list: take top $L=3$ corrections by $\widehat{A}_i$ plus the null action.
+  \item Probing: fixed probe length $T_{\mathrm{probe}}=8$ tokens per candidate.
+  \item Score: $\beta=2.0$, $\rho=0.1$, $\tau_{\mathrm{null}}=0$; injection scale multiplier $k$.
+\end{itemize}
+
+\paragraph{Budgets.}
+\begin{itemize}[leftmargin=*]
+  \item Main-table budget: $T_{\max}=512$ max-new-tokens.
+\end{itemize}
+
+\paragraph{Steering scales.}
+Tune only the score-scale hyperparameter $k$ (e.g., $k\in\{0.5,1,2,4\}$); correction vectors are stored as raw deltas and are not normalized.
+
+\paragraph{Sanity checks.}
+Before large runs, verify:
+(i) steering does not change outputs when $k=0$ (or when the null action is selected),
+(ii) increasing $k$ yields monotonic changes in probe scores at a few states, and
+(iii) ESM improves or matches Greedy-CoT on a small dev subset (e.g., 200 examples) with modest probe overhead.
+
+% -------- References (optional; leave empty for anonymous submission) --------
+\begin{thebibliography}{9}
+\bibitem{easysteer}
+H.~Xu et al.
+\newblock EasySteer: A Unified Framework for High-Performance and Extensible LLM Steering.
+\newblock arXiv:2509.25175, 2025.
+
+\end{thebibliography}
+
+\end{document}
