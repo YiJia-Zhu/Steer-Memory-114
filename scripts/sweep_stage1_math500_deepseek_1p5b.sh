@@ -11,8 +11,8 @@ GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
 # Grid (Stage I / offline_mine)
 # Total points = |K_LIST| * |ETA0_LIST| * |LAYER_LIST|
 # (must be <= MAX_GRID)
-# K_LIST=(4 6 8)
-# ETA0_LIST=(0.0 0.001 0.002)
+K_LIST=(4 6 8)
+ETA0_LIST=(0.0 0.001 0.002)
 LAYER_LIST=(16 18)
 # NOTE: offline_select.B / offline_select.min_per_control_point 已挪到 online sweep 中搜索（select/memory 很快）。
 

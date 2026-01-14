@@ -14,21 +14,21 @@ GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
 #             * |(optional)OFFLINE_SELECT_B_LIST| * |(optional)OFFLINE_SELECT_MIN_PER_M_LIST|
 # (must be <= MAX_GRID)
 # 注入强度
-# KSCALE_LIST=(0.25 0.5 1.0)
+KSCALE_LIST=(0.25 0.5 1.0)
 # 注入steer的阈值，低于则不注入
-# TAU_LIST=(0.0 0.05 0.1)
+TAU_LIST=(0.0 0.05 0.1)
 # top-1相似阈值，低于则判为无记忆，相当于null
-# MINSIM_LIST=(0.0 0.1 0.2)
+MINSIM_LIST=(0.0 0.1 0.2)
 # probe 的 logprob gain 权重；决定“探测信号”在 Score 里占比（rho=0 等价不使用 probe 信号，但仍会花 probe tokens，想省算力可再配合 probe_tokens=0/variant=no_probing）
-# RHO_LIST=(0.0 0.1 0.2)
+RHO_LIST=(0.0 0.1 0.2)
 
-# ONLINE_L_LIST=(1 2 3)                    # probe candidates (L)
+ONLINE_L_LIST=(1 2 3)                    # probe candidates (L)
 
 ONLINE_PROBE_TOKENS_LIST=(4 8 16)        # probe length (per cand)
 
 # offline_select（select/memory 很快；放到 online sweep 中一起扫）
-# OFFLINE_SELECT_B_LIST=(16 24 32)              # library size B
-# OFFLINE_SELECT_MIN_PER_M_LIST=(0 1 2)        # min_per_control_point
+OFFLINE_SELECT_B_LIST=(16 24 32)              # library size B
+OFFLINE_SELECT_MIN_PER_M_LIST=(0 1 2)        # min_per_control_point
 
 # Safety cap: refuse to run if grid size exceeds this.
 MAX_GRID="${MAX_GRID:-128}"
