@@ -11,9 +11,12 @@ GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
 # Grid (Stage I / offline_mine)
 # Total points = |K_LIST| * |ETA0_LIST| * |LAYER_LIST|
 # (must be <= MAX_GRID)
-K_LIST=(4 6 8)
-ETA0_LIST=(0.0 0.001 0.002)
-LAYER_LIST=(16 18)
+# rollouts数量
+# K_LIST=(4 6 8)
+# Reward函数中回答长度权重
+ETA0_LIST=(0.0 0.01 0.1)
+#提取/注入隐层层数
+LAYER_LIST=(12 14 16 18 20 22 24 26)
 # NOTE: offline_select.B / offline_select.min_per_control_point 已挪到 online sweep 中搜索（select/memory 很快）。
 
 # Safety cap: refuse to run if grid size exceeds this.
