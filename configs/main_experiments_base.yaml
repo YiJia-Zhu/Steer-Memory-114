@@ -1,0 +1,91 @@
+# Main-experiment base config (multi-model / multi-dataset runner uses this as a template).
+#
+# Intended usage:
+#   bash scripts/run_main_experiments.sh
+#
+# Notes:
+# - Keep offline_mine.candidate_layers = null to auto-adapt to model depth across different models.
+# - Use scripts/run_main_experiments.sh to override dataset/model specific fields (budget/splits/etc).
+
+seed: 0
+
+model:
+  name_or_path: "huggingface_models/DeepSeek-R1-Distill-Qwen-1.5B"
+  tensor_parallel_size: 1
+  enforce_eager: true
+  enable_chunked_prefill: false
+  dtype: "bfloat16"
+  gpu_memory_utilization: 0.9
+  max_model_len: 8192
+  max_num_seqs: 64
+
+task:
+  data_root: "datasets"
+  dataset: "gsm8k"
+  train_split: "train"
+  eval_split: "test"
+  max_train_examples: null
+  max_eval_examples: null
+
+prompt:
+  template: "gsm8k_0shot"
+
+decode:
+  temperature: 0.0
+  top_p: 1.0
+  max_new_tokens: 1024
+  logprobs: 1
+
+control_points:
+  M: 8
+  segment_delimiter: "\n\n"
+
+offline_mine:
+  K: 8
+  batch_size_examples: 16
+  K_pos: 2
+  K_neg: 2
+  temperature: 0.7
+  top_p: 0.95
+  max_new_tokens: 1024
+  eta0: 0.001
+  keep_top_C: 512
+  candidate_layers: null
+  require_correct_and_incorrect: true
+  min_correct_rollouts: 1
+  min_incorrect_rollouts: 1
+  pos_source: "rollout_or_gold"
+
+offline_select:
+  B: 64
+  min_per_control_point: 2
+  lambda_diversity: 0.5
+  epsilon: 0.0001
+  method: "dpp"
+  random_seed: 0
+
+offline_memory:
+  normalize_keys: true
+
+online:
+  variant: "esm"
+  batch_size_examples: 64
+  k_retrieve: 16
+  L: 2
+  probe_tokens: 8
+  beta: 2.0
+  rho: 0.1
+  k_scale: 0.5
+  tau_null: 0.0
+  min_sim: 0.0
+  min_entries: 1
+  protocol: "P1"
+
+eval:
+  methods: ["greedy", "esm"]
+  ablations: []
+
+outputs:
+  root_dir: "outputs"
+  run_name: "main_experiments"
+
