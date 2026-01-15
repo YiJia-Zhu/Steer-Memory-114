@@ -3,7 +3,9 @@ huggingface_models/*
 outputs
 logs/*
 !logs/.gitkeep
-
+configs/_grid_stage1_generated
+configs/_grid_online_generated
+configs/_main_generated
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

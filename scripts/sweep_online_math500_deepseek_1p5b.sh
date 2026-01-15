@@ -6,7 +6,7 @@ set -euo pipefail
 # =========================
 
 # GPUs to use for parallel runs (one job per GPU). Edit as needed.
-GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
+GPUS="${GPUS:-0,1}"
 
 # Grid (Online / select+memory+eval; reuse Stage-I mine artifacts)
 # Total points = |(optional)KSCALE_LIST| * |(optional)TAU_LIST| * |(optional)MINSIM_LIST| * |(optional)RHO_LIST|
@@ -40,7 +40,7 @@ BASE_CFG="${BASE_CFG:-configs/grid_math500_deepseek_1p5b.yaml}"
 # Examples:
 #   ARTIFACT_RUN_DIR="outputs/gs_stage1_math500_deepseek_1p5b/<run_id>"
 #   ARTIFACT_RUN_DIR="outputs/gs_stage1_math500_deepseek_1p5b/latest"
-ARTIFACT_RUN_DIR="${ARTIFACT_RUN_DIR:-outputs/gs_stage1_math500_deepseek_1p5b/latest}"
+ARTIFACT_RUN_DIR="${ARTIFACT_RUN_DIR:-outputs/gs_stage1_math500_deepseek_1p5b/20260114_182116__s1_L18}"
 
 # Output run name (folder under outputs/).
 RUN_NAME="${RUN_NAME:-gs_online_math500_deepseek_1p5b}"
