@@ -5,17 +5,18 @@ set -euo pipefail
 # User-editable (TOP)
 # =========================
 # GPUs to use for parallel runs. One job will reserve tensor_parallel_size GPUs.
-GPUS="${GPUS:-0,1}"
+GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
+# GPUS="${GPUS:-0,1}"
 
 # -------------------------
 # Models to sweep
-# Format: <model_key>|<name_or_path>|<tensor_parallel_size>
+# Format: <model_key>|<name_or_path>|<tensor_parallel_size>|<max_num_seqs>
 # -------------------------
 MODEL_SPECS=(
-  "ds_r1_qwen_1p5b|huggingface_models/DeepSeek-R1-Distill-Qwen-1.5B|1"
-  "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1"
-  "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1"
-  "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1"
+  "ds_r1_qwen_1p5b|huggingface_models/DeepSeek-R1-Distill-Qwen-1.5B|1|256"
+  "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1|256"
+  "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|128"
+  "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1|128"
 )
 
 # -------------------------
@@ -28,44 +29,44 @@ MODEL_SPECS=(
 # - max_model_len is the vLLM context window cap: prompt tokens + generated tokens.
 # - Use "__KEEP__" to keep BASE_CFG values for that field.
 # -------------------------
-# DATASET_SPECS=(
-#   "math500|math_0shot|test|test|100|400|16384|16384"
-#   "aime_2024|math_0shot|train|train|10|20|16384|16384"
-#   "amc23|math_0shot|test|test|10|30|16384|16384"
-#   "aime25|math_0shot|test|test|10|20|16384|16384"
-#   "gsm8k|gsm8k_0shot|train|test|1000|null|2048|4096"
-#   "arc-c|arc_0shot|train|validation|null|null|1024|4096" # 1.12k 299
-#   "openbookqa|arc_0shot|train|validation|1000|null|1024|4096" # 4k 500 
-#   "commonsense_qa|arc_0shot|train|validation|1000|null|1024|4096" # 9k 1k
-# )
-
 DATASET_SPECS=(
-  # "math500|math_0shot|test|test|10|10|16384|16384"
-  # "aime_2024|math_0shot|train|train|10|10|16384|16384"
-  # "amc23|math_0shot|test|test|10|10|16384|16384"
-  # "aime25|math_0shot|test|test|10|10|16384|16384"
-  # "gsm8k|gsm8k_0shot|train|test|10|10|2048|4096"
-  # "arc-c|arc_0shot|train|validation|10|10|1024|4096" # 1.12k 299
-  # "openbookqa|arc_0shot|train|validation|10|10|1024|4096" # 4k 500 
-  "commonsense_qa|arc_0shot|train|validation|10|10|1024|4096" # 9k 1k
+  "math500|math_0shot|test|test|100|400|16384|16384"
+  "aime_2024|math_0shot|train|train|10|20|16384|16384"
+  "amc23|math_0shot|test|test|10|30|16384|16384"
+  "aime25|math_0shot|test|test|10|20|16384|16384"
+  "gsm8k|gsm8k_0shot|train|test|100|null|2048|4096"
+  "arc-c|arc_0shot|train|validation|100|null|1024|4096" # 1.12k 299
+  "openbookqa|arc_0shot|train|validation|100|null|1024|4096" # 4k 500 
+  "commonsense_qa|arc_0shot|train|validation|100|null|1024|4096" # 9k 1k
 )
+
+# DATASET_SPECS=(
+#   # "math500|math_0shot|test|test|10|10|16384|16384"
+#   # "aime_2024|math_0shot|train|train|10|10|16384|16384"
+#   # "amc23|math_0shot|test|test|10|10|16384|16384"
+#   # "aime25|math_0shot|test|test|10|10|16384|16384"
+#   # "gsm8k|gsm8k_0shot|train|test|10|10|2048|4096"
+#   # "arc-c|arc_0shot|train|validation|10|10|1024|4096" # 1.12k 299
+#   # "openbookqa|arc_0shot|train|validation|10|10|1024|4096" # 4k 500 
+#   "commonsense_qa|arc_0shot|train|validation|10|10|1024|4096" # 9k 1k
+# )
 # -------------------------
 # Grid to sweep (3 params)
 # Total points = |MODEL_SPECS| * |DATASET_SPECS| * |LAYER_LIST| * |ETA0_LIST| * |KSCALE_LIST|
 # -------------------------
 
-# # 提取/注入的层数：支持比例（适配不同模型层数），如 1/5 或 0.6（注意：整数如 1 会被当作绝对层号 1）
-# LAYER_LIST=(0.2 0.4 0.6 0.8)
-# # Reward 函数中回答长度权重
-# ETA0_LIST=(0 0.01 0.1)
-# # 注入强度
-# KSCALE_LIST=(0.25 0.5 0.75 1.0)
-
-LAYER_LIST=(0.8)
+# 提取/注入的层数：支持比例（适配不同模型层数），如 1/5 或 0.6（注意：整数如 1 会被当作绝对层号 1）
+LAYER_LIST=(0.2 0.4 0.6 0.8)
 # Reward 函数中回答长度权重
-ETA0_LIST=(0)
+ETA0_LIST=(0 0.01 0.1)
 # 注入强度
-KSCALE_LIST=(0.25)
+KSCALE_LIST=(0.25 0.5 0.75 1.0)
+
+# LAYER_LIST=(0.8)
+# # Reward 函数中回答长度权重
+# ETA0_LIST=(0)
+# # 注入强度
+# KSCALE_LIST=(0.25)
 
 # -------------------------
 # Runtime controls
@@ -92,6 +93,19 @@ SWEEP_ID="${SWEEP_ID:-$(date +%Y%m%d_%H%M%S)}"
 
 # If DRY_RUN=1, only generate per-run configs and print the plan.
 DRY_RUN="${DRY_RUN:-0}"
+
+# Resume / listing controls.
+# - RESUME_FROM: 0-based job index to start from (skips jobs < RESUME_FROM).
+# - LIST_JOBS=1: print idx -> (model,dataset,layer,eta0,k_scale,run_name,run_id) and exit.
+#
+# Ordering is the nested-loop order in this script:
+#   model -> dataset -> layer -> eta0 -> k_scale
+# Index formula (0-based):
+#   idx = ((((m*n_datasets + d)*n_layers + l)*n_eta0 + e)*n_k + k)
+# where (m,d,l,e,k) are 0-based indices into:
+#   MODEL_SPECS, DATASET_SPECS, LAYER_LIST, ETA0_LIST, KSCALE_LIST.
+RESUME_FROM="${RESUME_FROM:-${RESUME:-0}}"
+LIST_JOBS="${LIST_JOBS:-0}"
 
 # Use current python by default (assumes you're already in the easysteer env).
 # If you prefer forcing conda-run, set USE_CONDA_RUN=1.
@@ -159,6 +173,11 @@ if (( grid_size > MAX_GRID )); then
   exit 2
 fi
 
+if [[ ! "${RESUME_FROM}" =~ ^[0-9]+$ ]]; then
+  echo "[error] RESUME_FROM must be a non-negative integer, got: ${RESUME_FROM}" >&2
+  exit 2
+fi
+
 OUT_CFG_DIR="${OUT_CFG_DIR:-configs/_grid_full_generated/${SWEEP_ID}}"
 LOG_DIR="${LOG_DIR:-logs/grid_full_${SWEEP_ID}}"
 mkdir -p "${OUT_CFG_DIR}" "${LOG_DIR}"
@@ -187,20 +206,22 @@ write_cfg() {
   local run_name="$2"
   local model_path="$3"
   local model_tp="$4"
-  local dataset="$5"
-  local prompt_template="$6"
-  local train_split="$7"
-  local eval_split="$8"
-  local max_train="$9"
-  local max_eval="${10}"
-  local tmax="${11}"
-  local max_model_len="${12}"
-  local LAYER="${13}"
-  local ETA0="${14}"
-  local KS="${15}"
+  local max_num_seqs="$5"
+  local dataset="$6"
+  local prompt_template="$7"
+  local train_split="$8"
+  local eval_split="$9"
+  local max_train="${10}"
+  local max_eval="${11}"
+  local tmax="${12}"
+  local max_model_len="${13}"
+  local LAYER="${14}"
+  local ETA0="${15}"
+  local KS="${16}"
 
   env BASE_CFG="${BASE_CFG}" OUT_CFG="${out_cfg}" RUN_NAME="${run_name}" \
     MODEL_PATH="${model_path}" MODEL_TP="${model_tp}" \
+    MAX_NUM_SEQS="${max_num_seqs}" \
     DATASET="${dataset}" PROMPT_TEMPLATE="${prompt_template}" TRAIN_SPLIT="${train_split}" EVAL_SPLIT="${eval_split}" \
     MAX_TRAIN="${max_train}" MAX_EVAL="${max_eval}" TMAX="${tmax}" MAX_MODEL_LEN="${max_model_len}" \
     OFFLINE_ETA0="${ETA0}" OFFLINE_LAYER="${LAYER}" ONLINE_K_SCALE="${KS}" \
@@ -229,6 +250,11 @@ raw["model"]["name_or_path"] = os.environ["MODEL_PATH"]
 tp_s = str(os.environ.get("MODEL_TP", "__KEEP__")).strip()
 if tp_s and tp_s != "__KEEP__":
     raw["model"]["tensor_parallel_size"] = int(tp_s)
+mns_s = str(os.environ.get("MAX_NUM_SEQS", "__KEEP__")).strip()
+if mns_s and mns_s != "__KEEP__":
+    if mns_s.lower() in {"none", "null"}:
+        raise ValueError("MAX_NUM_SEQS cannot be null/none")
+    raw["model"]["max_num_seqs"] = int(mns_s)
 
 raw.setdefault("task", {})
 raw["task"]["dataset"] = os.environ["DATASET"]
@@ -301,11 +327,19 @@ with out_cfg.open("w", encoding="utf-8") as f:
 PY
 }
 
-jobs=()  # "RUN_NAME|RID|TP|CFG_PATH|CMD"
+jobs=()  # "IDX|RUN_NAME|RID|TP|CFG_PATH|CMD"
+job_idx=0
+if [[ "${LIST_JOBS}" == "1" ]]; then
+  echo "[list_jobs] 1"
+  echo "[ordering] model -> dataset -> layer -> eta0 -> k_scale"
+  echo "[note] set SWEEP_ID to match previous run_ids if needed"
+  echo
+fi
 for mspec in "${MODEL_SPECS[@]}"; do
-  IFS='|' read -r model_key model_path model_tp <<< "${mspec}"
+  IFS='|' read -r model_key model_path model_tp model_max_num_seqs <<< "${mspec}"
   model_key="$(sanitize "${model_key}")"
   model_tp="${model_tp:-1}"
+  model_max_num_seqs="${model_max_num_seqs:-__KEEP__}"
 
   for dspec in "${DATASET_SPECS[@]}"; do
     IFS='|' read -r dataset prompt_template train_split eval_split max_train max_eval tmax max_model_len <<< "${dspec}"
@@ -317,8 +351,20 @@ for mspec in "${MODEL_SPECS[@]}"; do
         for KS in "${KSCALE_LIST[@]}"; do
           rid="${SWEEP_ID}__L$(f_tag "${LAYER}")_eta$(f_tag "${ETA0}")_ks$(f_tag "${KS}")"
           cfg_path="${OUT_CFG_DIR}/${run_name}__${rid}.yaml"
+          if [[ "${LIST_JOBS}" == "1" ]]; then
+            printf "%5d | model=%s | dataset=%s | layer=%s | eta0=%s | k_scale=%s | run_name=%s | run_id=%s\n" \
+              "${job_idx}" "${model_key}" "${dataset_key}" "${LAYER}" "${ETA0}" "${KS}" "${run_name}" "${rid}"
+            job_idx=$((job_idx + 1))
+            continue
+          fi
+
+          if (( job_idx < RESUME_FROM )); then
+            job_idx=$((job_idx + 1))
+            continue
+          fi
+
           write_cfg \
-            "${cfg_path}" "${run_name}" "${model_path}" "${model_tp}" \
+            "${cfg_path}" "${run_name}" "${model_path}" "${model_tp}" "${model_max_num_seqs}" \
             "${dataset}" "${prompt_template}" "${train_split}" "${eval_split}" \
             "${max_train}" "${max_eval}" "${tmax}" "${max_model_len}" \
             "${LAYER}" "${ETA0}" "${KS}"
@@ -329,17 +375,25 @@ for mspec in "${MODEL_SPECS[@]}"; do
           cmd+=" && ${PY[*]} run.py --config \"${cfg_path}\" --run-id \"${rid}\" memory"
           cmd+=" && ${PY[*]} run.py --config \"${cfg_path}\" --run-id \"${rid}\" eval"
 
-          jobs+=( "${run_name}|${rid}|${model_tp}|${cfg_path}|${cmd}" )
+          jobs+=( "${job_idx}|${run_name}|${rid}|${model_tp}|${cfg_path}|${cmd}" )
+          job_idx=$((job_idx + 1))
         done
       done
     done
   done
 done
 
+if [[ "${LIST_JOBS}" == "1" ]]; then
+  echo
+  echo "[n_jobs_total] ${grid_size}"
+  exit 0
+fi
+
 echo "[mode] full grid (mine+select+memory+eval)"
 echo "[base_cfg] ${BASE_CFG}"
 echo "[run_name_prefix] ${RUN_NAME_PREFIX}"
 echo "[sweep_id] ${SWEEP_ID}"
+echo "[resume_from] ${RESUME_FROM} (0-based index)"
 echo "[gpus] ${GPUS}"
 echo "[n_models] ${n_models}"
 echo "[n_datasets] ${n_datasets}"
@@ -348,6 +402,11 @@ echo "[n_jobs] ${#jobs[@]}"
 echo "[out_cfg_dir] ${OUT_CFG_DIR}"
 echo "[log_dir] ${LOG_DIR}"
 echo
+
+if (( ${#jobs[@]} == 0 )); then
+  echo "[no jobs] RESUME_FROM=${RESUME_FROM} (grid_size=${grid_size})"
+  exit 0
+fi
 
 if [[ "${DRY_RUN}" == "1" ]]; then
   echo "[dry_run] 1 (configs generated; jobs not started)"
@@ -388,7 +447,7 @@ while [[ "${#queue[@]}" -gt 0 || "${#pid_to_gpus[@]}" -gt 0 ]]; do
     found=0
     for i in "${!queue[@]}"; do
       job="${queue[$i]}"
-      IFS='|' read -r run_name rid tp cfg cmd <<< "${job}"
+      IFS='|' read -r idx run_name rid tp cfg cmd <<< "${job}"
       tp="${tp:-1}"
       need="${tp}"
       if (( need <= 0 )); then
@@ -400,6 +459,7 @@ while [[ "${#queue[@]}" -gt 0 || "${#pid_to_gpus[@]}" -gt 0 ]]; do
         gpu_ids="$(IFS=','; echo "${gsel[*]}")"
         job_name="${run_name}__${rid}"
         safe_job_name="$(sanitize "${job_name}")"
+        safe_job_name="$(printf "%05d__%s" "${idx}" "${safe_job_name}")"
 
         # Remove this job from queue.
         queue=( "${queue[@]:0:${i}}" "${queue[@]:$((i + 1))}" )

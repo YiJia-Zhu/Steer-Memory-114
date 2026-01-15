@@ -5,17 +5,18 @@ set -euo pipefail
 # User-editable (TOP)
 # =========================
 # GPUs to use for parallel runs (one job per GPU). Edit as needed.
+# GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
 GPUS="${GPUS:-0,1}"
 
 # -------------------------
 # Models to run
-# Format: <model_key>|<name_or_path>|<tensor_parallel_size>
+# Format: <model_key>|<name_or_path>|<tensor_parallel_size>|<max_num_seqs>
 # -------------------------
 MODEL_SPECS=(
-  "ds_r1_qwen_1p5b|huggingface_models/DeepSeek-R1-Distill-Qwen-1.5B|1"
-  "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1"
-  "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1"
-  "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1"
+  "ds_r1_qwen_1p5b|huggingface_models/DeepSeek-R1-Distill-Qwen-1.5B|1|512"
+  "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1|256"
+  "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|128"
+  "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1|128"
 )
 
 # -------------------------
@@ -31,14 +32,14 @@ MODEL_SPECS=(
 # Use "__KEEP__" to keep the base-config value for that field.
 # -------------------------
 DATASET_SPECS=(
-  # "math500|math_0shot|test|test|100|400|16384|16384"
-  # "aime_2024|math_0shot|train|train|10|20|16384|16384"
-  # "amc23|math_0shot|test|test|10|30|16384|16384"
-  # "aime25|math_0shot|test|test|10|20|16384|16384"
-  "gsm8k|gsm8k_0shot|train|test|1000|null|2048|4096"
-  # "arc-c|arc_0shot|train|validation|null|null|1024|4096" # 1.12k 299
-  # "openbookqa|arc_0shot|train|validation|1000|null|1024|4096" # 4k 500 
-  # "commonsense_qa|arc_0shot|train|validation|1000|null|1024|4096" # 9k 1k
+  "math500|math_0shot|test|test|100|400|16384|16384"
+  "aime_2024|math_0shot|train|train|10|20|16384|16384"
+  "amc23|math_0shot|test|test|10|30|16384|16384"
+  "aime25|math_0shot|test|test|10|20|16384|16384"
+  "gsm8k|gsm8k_0shot|train|test|100|null|2048|4096"
+  "arc-c|arc_0shot|train|validation|100|null|1024|4096" # 1.12k 299
+  "openbookqa|arc_0shot|train|validation|100|null|1024|4096" # 4k 500 
+  "commonsense_qa|arc_0shot|train|validation|100|null|1024|4096" # 9k 1k
 )
 # DATASET_SPECS=(
 #   "math500|math_0shot|test|test|10|10|16384|16384"
@@ -78,6 +79,18 @@ EXP_ID="${EXP_ID:-$(date +%Y%m%d_%H%M%S)}"
 
 # If DRY_RUN=1, only generate configs and print the plan.
 DRY_RUN="${DRY_RUN:-0}"
+
+# Resume / listing controls.
+# - RESUME_FROM: 0-based job index to start from (skips jobs < RESUME_FROM).
+# - LIST_JOBS=1: print idx -> (model,dataset,run_name,run_id) and exit.
+#
+# Ordering is the nested-loop order in this script:
+#   model -> dataset
+# Index formula (0-based):
+#   idx = m*n_datasets + d
+# where (m,d) are 0-based indices into MODEL_SPECS and DATASET_SPECS.
+RESUME_FROM="${RESUME_FROM:-${RESUME:-0}}"
+LIST_JOBS="${LIST_JOBS:-0}"
 
 # Use current python by default (assumes you're already in the easysteer env).
 # If you prefer forcing conda-run, set USE_CONDA_RUN=1.
@@ -126,6 +139,14 @@ if [[ "${#STAGE_LIST[@]}" -le 0 ]]; then
   exit 2
 fi
 
+n_models="${#MODEL_SPECS[@]}"
+n_datasets="${#DATASET_SPECS[@]}"
+total_jobs=$(( n_models * n_datasets ))
+if [[ ! "${RESUME_FROM}" =~ ^[0-9]+$ ]]; then
+  echo "[error] RESUME_FROM must be a non-negative integer, got: ${RESUME_FROM}" >&2
+  exit 2
+fi
+
 OUT_CFG_DIR="${OUT_CFG_DIR:-configs/_main_generated/${EXP_ID}}"
 LOG_DIR="${LOG_DIR:-logs/main_${EXP_ID}}"
 mkdir -p "${OUT_CFG_DIR}" "${LOG_DIR}"
@@ -145,17 +166,19 @@ write_cfg() {
   local run_name="$2"
   local model_path="$3"
   local tp="$4"
-  local dataset="$5"
-  local prompt_template="$6"
-  local train_split="$7"
-  local eval_split="$8"
-  local max_train="$9"
-  local max_eval="${10}"
-  local tmax="${11}"
-  local max_model_len="${12}"
+  local max_num_seqs="$5"
+  local dataset="$6"
+  local prompt_template="$7"
+  local train_split="$8"
+  local eval_split="$9"
+  local max_train="${10}"
+  local max_eval="${11}"
+  local tmax="${12}"
+  local max_model_len="${13}"
 
   env BASE_CFG="${BASE_CFG}" OUT_CFG="${out_cfg}" RUN_NAME="${run_name}" \
     MODEL_PATH="${model_path}" MODEL_TP="${tp}" \
+    MAX_NUM_SEQS="${max_num_seqs}" \
     DATASET="${dataset}" PROMPT_TEMPLATE="${prompt_template}" TRAIN_SPLIT="${train_split}" EVAL_SPLIT="${eval_split}" \
     MAX_TRAIN="${max_train}" MAX_EVAL="${max_eval}" TMAX="${tmax}" MAX_MODEL_LEN="${max_model_len}" \
     RUN_GREEDY="${RUN_GREEDY}" RUN_ESM="${RUN_ESM}" \
@@ -228,6 +251,13 @@ if max_model_len != "__KEEP__":
     raw.setdefault("model", {})
     raw["model"]["max_model_len"] = int(max_model_len) if max_model_len is not None else None
 
+max_num_seqs = _maybe_int(os.environ.get("MAX_NUM_SEQS", "__KEEP__"))
+if max_num_seqs != "__KEEP__":
+    if max_num_seqs is None:
+        raise ValueError("MAX_NUM_SEQS cannot be null/none")
+    raw.setdefault("model", {})
+    raw["model"]["max_num_seqs"] = int(max_num_seqs)
+
 # Eval methods toggle.
 methods = []
 if str(os.environ.get("RUN_GREEDY", "1")).strip() not in {"0", "false", "False"}:
@@ -247,10 +277,18 @@ with out_cfg.open("w", encoding="utf-8") as f:
 PY
 }
 
-jobs=()  # "RUN_NAME|CFG_PATH|CMD"
+jobs=()  # "IDX|RUN_NAME|CFG_PATH|CMD"
+job_idx=0
+if [[ "${LIST_JOBS}" == "1" ]]; then
+  echo "[list_jobs] 1"
+  echo "[ordering] model -> dataset"
+  echo "[note] set EXP_ID to match previous run_id if needed"
+  echo
+fi
 for mspec in "${MODEL_SPECS[@]}"; do
-  IFS='|' read -r model_key model_path model_tp <<< "${mspec}"
+  IFS='|' read -r model_key model_path model_tp model_max_num_seqs <<< "${mspec}"
   model_key="$(sanitize "${model_key}")"
+  model_max_num_seqs="${model_max_num_seqs:-__KEEP__}"
 
   for dspec in "${DATASET_SPECS[@]}"; do
     IFS='|' read -r dataset prompt_template train_split eval_split max_train max_eval tmax max_model_len <<< "${dspec}"
@@ -258,8 +296,20 @@ for mspec in "${MODEL_SPECS[@]}"; do
     run_name="$(sanitize "${RUN_NAME_PREFIX}")_${model_key}_${dataset_key}"
     cfg_path="${OUT_CFG_DIR}/${run_name}.yaml"
 
+    if [[ "${LIST_JOBS}" == "1" ]]; then
+      printf "%5d | model=%s | dataset=%s | run_name=%s | run_id=%s\n" \
+        "${job_idx}" "${model_key}" "${dataset_key}" "${run_name}" "${EXP_ID}"
+      job_idx=$((job_idx + 1))
+      continue
+    fi
+
+    if (( job_idx < RESUME_FROM )); then
+      job_idx=$((job_idx + 1))
+      continue
+    fi
+
     write_cfg \
-      "${cfg_path}" "${run_name}" "${model_path}" "${model_tp}" \
+      "${cfg_path}" "${run_name}" "${model_path}" "${model_tp}" "${model_max_num_seqs}" \
       "${dataset}" "${prompt_template}" "${train_split}" "${eval_split}" \
       "${max_train}" "${max_eval}" "${tmax}" "${max_model_len}"
 
@@ -272,9 +322,16 @@ for mspec in "${MODEL_SPECS[@]}"; do
       cmd+=" && ${PY[*]} run.py --config \"${cfg_path}\" --run-id \"${EXP_ID}\" ${st}"
     done
 
-    jobs+=( "${run_name}|${cfg_path}|${cmd}" )
+    jobs+=( "${job_idx}|${run_name}|${cfg_path}|${cmd}" )
+    job_idx=$((job_idx + 1))
   done
 done
+
+if [[ "${LIST_JOBS}" == "1" ]]; then
+  echo
+  echo "[n_jobs_total] ${total_jobs}"
+  exit 0
+fi
 
 echo "[mode] main experiments"
 echo "[base_cfg] ${BASE_CFG}"
@@ -282,13 +339,20 @@ echo "[run_name_prefix] ${RUN_NAME_PREFIX}"
 echo "[exp_id] ${EXP_ID}"
 echo "[stages] ${STAGES}"
 echo "[methods] RUN_GREEDY=${RUN_GREEDY} RUN_ESM=${RUN_ESM}"
+echo "[resume_from] ${RESUME_FROM} (0-based index)"
 echo "[gpus] ${GPUS}"
-echo "[n_models] ${#MODEL_SPECS[@]}"
-echo "[n_datasets] ${#DATASET_SPECS[@]}"
+echo "[n_models] ${n_models}"
+echo "[n_datasets] ${n_datasets}"
+echo "[n_jobs_total] ${total_jobs}"
 echo "[n_jobs] ${#jobs[@]}"
 echo "[out_cfg_dir] ${OUT_CFG_DIR}"
 echo "[log_dir] ${LOG_DIR}"
 echo
+
+if (( ${#jobs[@]} == 0 )); then
+  echo "[no jobs] RESUME_FROM=${RESUME_FROM} (n_jobs_total=${total_jobs})"
+  exit 0
+fi
 
 if [[ "${DRY_RUN}" == "1" ]]; then
   echo "[dry_run] 1 (configs generated; jobs not started)"
@@ -331,8 +395,9 @@ while [[ "${#queue[@]}" -gt 0 || "${#pid_to_gpu[@]}" -gt 0 ]]; do
     gpu="${available_gpus[0]}"
     available_gpus=( "${available_gpus[@]:1}" )
 
-    IFS='|' read -r name cfg cmd <<< "${job}"
-    start_job "${gpu}" "${name}" "${cfg}" "${cmd}"
+    IFS='|' read -r idx name cfg cmd <<< "${job}"
+    safe_name="$(printf "%05d__%s" "${idx}" "${name}")"
+    start_job "${gpu}" "${safe_name}" "${cfg}" "${cmd}"
   done
 
   if [[ "${#pid_to_gpu[@]}" -gt 0 ]]; then
