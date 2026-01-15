@@ -298,6 +298,8 @@ fi
 available_gpus=( "${GPU_LIST[@]}" )
 declare -A pid_to_gpu=()
 declare -A pid_to_name=()
+failed=0
+failed_jobs=()
 
 start_job() {
   local gpu="$1"
@@ -334,26 +336,37 @@ while [[ "${#queue[@]}" -gt 0 || "${#pid_to_gpu[@]}" -gt 0 ]]; do
   done
 
   if [[ "${#pid_to_gpu[@]}" -gt 0 ]]; then
-    if ! wait -n; then
-      echo "[error] a job failed; killing remaining jobs..." >&2
-      for pid in "${!pid_to_gpu[@]}"; do
-        kill "${pid}" 2>/dev/null || true
-      done
-      exit 1
+    done_pid=""
+    rc=0
+    if wait -n -p done_pid; then
+      rc=0
+    else
+      rc=$?
     fi
 
-    for pid in "${!pid_to_gpu[@]}"; do
-      if ! kill -0 "${pid}" 2>/dev/null; then
-        gpu="${pid_to_gpu[${pid}]}"
-        name="${pid_to_name[${pid}]}"
-        unset pid_to_gpu["${pid}"]
-        unset pid_to_name["${pid}"]
-        available_gpus+=( "${gpu}" )
+    if [[ -n "${done_pid}" ]]; then
+      gpu="${pid_to_gpu[${done_pid}]}"
+      name="${pid_to_name[${done_pid}]}"
+      unset pid_to_gpu["${done_pid}"]
+      unset pid_to_name["${done_pid}"]
+      available_gpus+=( "${gpu}" )
+      if (( rc != 0 )); then
+        failed=$((failed + 1))
+        failed_jobs+=( "${name}|gpu=${gpu}|rc=${rc}" )
+        echo "[fail][gpu=${gpu}][rc=${rc}] ${name}" >&2
+      else
         echo "[done][gpu=${gpu}] ${name}"
       fi
-    done
+    fi
   fi
 done
 
 echo
+if (( failed > 0 )); then
+  echo "[all done] exp_id=${EXP_ID} (failed=${failed}/${#jobs[@]})" >&2
+  for j in "${failed_jobs[@]}"; do
+    echo "  - ${j}" >&2
+  done
+  exit 1
+fi
 echo "[all done] exp_id=${EXP_ID}"

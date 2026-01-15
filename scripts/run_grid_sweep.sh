@@ -357,6 +357,8 @@ fi
 available_gpus=( "${GPU_LIST[@]}" )
 declare -A pid_to_gpus=()
 declare -A pid_to_job=()
+failed=0
+failed_jobs=()
 
 start_job() {
   local gpu_ids="$1"
@@ -413,25 +415,29 @@ while [[ "${#queue[@]}" -gt 0 || "${#pid_to_gpus[@]}" -gt 0 ]]; do
   done
 
   if [[ "${#pid_to_gpus[@]}" -gt 0 ]]; then
-    if ! wait -n; then
-      echo "[error] a job failed; killing remaining jobs..." >&2
-      for pid in "${!pid_to_gpus[@]}"; do
-        kill "${pid}" 2>/dev/null || true
-      done
-      exit 1
+    done_pid=""
+    rc=0
+    if wait -n -p done_pid; then
+      rc=0
+    else
+      rc=$?
     fi
 
-    for pid in "${!pid_to_gpus[@]}"; do
-      if ! kill -0 "${pid}" 2>/dev/null; then
-        gpu_ids="${pid_to_gpus[${pid}]}"
-        job_name="${pid_to_job[${pid}]}"
-        unset pid_to_gpus["${pid}"]
-        unset pid_to_job["${pid}"]
-        IFS=',' read -r -a freed <<< "${gpu_ids}"
-        available_gpus+=( "${freed[@]}" )
+    if [[ -n "${done_pid}" ]]; then
+      gpu_ids="${pid_to_gpus[${done_pid}]}"
+      job_name="${pid_to_job[${done_pid}]}"
+      unset pid_to_gpus["${done_pid}"]
+      unset pid_to_job["${done_pid}"]
+      IFS=',' read -r -a freed <<< "${gpu_ids}"
+      available_gpus+=( "${freed[@]}" )
+      if (( rc != 0 )); then
+        failed=$((failed + 1))
+        failed_jobs+=( "${job_name}|gpu=${gpu_ids}|rc=${rc}" )
+        echo "[fail][gpu=${gpu_ids}][rc=${rc}] ${job_name}" >&2
+      else
         echo "[done][gpu=${gpu_ids}] ${job_name}"
       fi
-    done
+    fi
   else
     if [[ "${#queue[@]}" -gt 0 && "${started_any}" == "0" ]]; then
       echo "[error] cannot schedule remaining jobs; check GPUS list and MODEL_SPECS tensor_parallel_size" >&2
@@ -441,4 +447,11 @@ while [[ "${#queue[@]}" -gt 0 || "${#pid_to_gpus[@]}" -gt 0 ]]; do
 done
 
 echo
+if (( failed > 0 )); then
+  echo "[all done] full sweep_id=${SWEEP_ID} (failed=${failed}/${#jobs[@]})" >&2
+  for j in "${failed_jobs[@]}"; do
+    echo "  - ${j}" >&2
+  done
+  exit 1
+fi
 echo "[all done] full sweep_id=${SWEEP_ID}"
