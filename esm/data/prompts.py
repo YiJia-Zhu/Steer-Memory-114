@@ -19,7 +19,7 @@ def render_user_prompt(ex: TaskExample, template: str) -> str:
 
     if template in {"gsm8k_0shot_compact"}:
         return (
-            "Solve the following problem.\n"
+            "Solve the following problem step by step.\n"
             "Keep the solution brief and avoid markdown/LaTeX.\n"
             "Return the final numeric answer on the last line in the exact format:\n"
             "#### <answer>\n\n"
@@ -29,7 +29,7 @@ def render_user_prompt(ex: TaskExample, template: str) -> str:
 
     if template in {"math_0shot"}:
         return (
-            "Solve the following problem carefully.\n"
+            "Solve the following problem step by step.\n"
             "You may show intermediate steps.\n"
             "Put the final answer in \\boxed{<final answer>} on the last line.\n\n"
             "Problem:\n"
@@ -45,8 +45,8 @@ def render_user_prompt(ex: TaskExample, template: str) -> str:
                 lines.append(f"({lab}) {options[lab]}")
         opts_block = "\n".join(lines)
         return (
+            "Solve the following problem step by step.\n"
             "Choose the correct option (A, B, C, or D).\n"
-            "Briefly explain your reasoning.\n"
             "Put only the chosen letter on the last line in the format:\n"
             "#### <A/B/C/D>\n\n"
             "Question:\n"
@@ -57,6 +57,7 @@ def render_user_prompt(ex: TaskExample, template: str) -> str:
 
     if template in {"strategyqa_0shot"}:
         return (
+            "Solve the following problem step by step.\n"
             "Answer the question with Yes or No.\n"
             "Put only the final label on the last line in the format:\n"
             "#### <Yes/No>\n\n"

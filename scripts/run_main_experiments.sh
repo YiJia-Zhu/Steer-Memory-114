@@ -21,7 +21,7 @@ MODEL_SPECS=(
 # -------------------------
 # Datasets to run (must be supported by esm/data/loaders.py and available locally)
 # Format:
-#   <dataset>|<prompt_template>|<train_split>|<eval_split>|<max_train>|<max_eval>|<T_max>|<max_model_len>
+#   <dataset>|<prompt_template>|<train_split>|<eval_split>|<max_train>|<max_eval>|<T_max/max_new_token>|<max_model_len>
 #
 # Notes:
 # - T_max is a shorthand in this script for generation budget: decode.max_new_tokens (and offline_mine.max_new_tokens).
@@ -31,14 +31,14 @@ MODEL_SPECS=(
 # Use "__KEEP__" to keep the base-config value for that field.
 # -------------------------
 DATASET_SPECS=(
-  "math500|math_0shot|test|test|100|400|16384|16384"
-  "aime_2024|math_0shot|train|train|10|20|16384|16384"
-  "amc23|math_0shot|test|test|10|30|16384|16384"
-  "aime25|math_0shot|test|test|10|20|16384|16384"
+  # "math500|math_0shot|test|test|100|400|16384|16384"
+  # "aime_2024|math_0shot|train|train|10|20|16384|16384"
+  # "amc23|math_0shot|test|test|10|30|16384|16384"
+  # "aime25|math_0shot|test|test|10|20|16384|16384"
   "gsm8k|gsm8k_0shot|train|test|1000|null|2048|4096"
-  "arc-c|arc_0shot|train|validation|null|null|1024|4096" # 1.12k 299
-  "openbookqa|arc_0shot|train|validation|1000|null|1024|4096" # 4k 500 
-  "commonsense_qa|arc_0shot|train|validation|1000|null|1024|4096" # 9k 1k
+  # "arc-c|arc_0shot|train|validation|null|null|1024|4096" # 1.12k 299
+  # "openbookqa|arc_0shot|train|validation|1000|null|1024|4096" # 4k 500 
+  # "commonsense_qa|arc_0shot|train|validation|1000|null|1024|4096" # 9k 1k
 )
 # DATASET_SPECS=(
 #   "math500|math_0shot|test|test|10|10|16384|16384"
