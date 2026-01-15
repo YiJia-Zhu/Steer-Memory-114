@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import heapq
+import math
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,6 +64,139 @@ def _select_pos_neg(rewards: list[float], k_pos: int, k_neg: int) -> tuple[list[
     return pos, neg
 
 
+def _resolve_candidate_layers(specs: list[Any], *, num_layers: int) -> list[int]:
+    """
+    Resolve layer specs into concrete 0-based layer indices.
+
+    Supports:
+      - int indices (e.g. 18)
+      - negative int indices (Python-style; -1 means last)
+      - ratio strings like "1/5"
+      - ratio floats like 0.6 (or "0.6"), mapped to round(r*(num_layers-1))
+        (ratios are expected in [0, 1]; 1.0 means the last layer)
+    """
+    if int(num_layers) <= 0:
+        raise ValueError(f"num_layers must be positive, got {num_layers}")
+
+    resolved: list[int] = []
+    seen: set[int] = set()
+
+    for raw in specs:
+        if raw is None:
+            continue
+        if isinstance(raw, bool):
+            raise TypeError(f"Invalid candidate layer spec (bool): {raw}")
+
+        # 1) Absolute integer index.
+        if isinstance(raw, (int, np.integer)):
+            lid = int(raw)
+            if lid < 0:
+                lid = int(num_layers) + lid
+            if lid < 0 or lid >= int(num_layers):
+                raise ValueError(f"candidate layer index out of range: {raw} (num_layers={num_layers})")
+            if lid not in seen:
+                resolved.append(lid)
+                seen.add(lid)
+            continue
+
+        # 2) Float: treat [0, 1] as ratio; otherwise require integer-like as absolute index.
+        if isinstance(raw, (float, np.floating)):
+            f = float(raw)
+            if not math.isfinite(f):
+                raise ValueError(f"Invalid candidate layer spec: {raw!r}")
+            if 0.0 <= f <= 1.0:
+                lid = int(round(f * float(int(num_layers) - 1)))
+                lid = max(0, min(int(num_layers) - 1, lid))
+                if lid not in seen:
+                    resolved.append(lid)
+                    seen.add(lid)
+                continue
+            if abs(f - round(f)) < 1e-9:
+                lid = int(round(f))
+                if lid < 0:
+                    lid = int(num_layers) + lid
+                if lid < 0 or lid >= int(num_layers):
+                    raise ValueError(f"candidate layer index out of range: {raw!r} (num_layers={num_layers})")
+                if lid not in seen:
+                    resolved.append(lid)
+                    seen.add(lid)
+                continue
+            raise ValueError(f"Invalid candidate layer spec (float): {raw!r}")
+
+        s = str(raw).strip()
+        if s == "":
+            continue
+
+        # 3) Fraction a/b.
+        if "/" in s:
+            parts = [p.strip() for p in s.split("/")]
+            if len(parts) != 2 or parts[0] == "" or parts[1] == "":
+                raise ValueError(f"Invalid candidate layer ratio spec: {s!r}")
+            try:
+                a = float(parts[0])
+                b = float(parts[1])
+            except Exception as e:
+                raise ValueError(f"Invalid candidate layer ratio spec: {s!r}") from e
+            if not math.isfinite(a) or not math.isfinite(b) or b == 0.0:
+                raise ValueError(f"Invalid candidate layer ratio spec: {s!r}")
+            ratio = float(a / b)
+            if not math.isfinite(ratio) or ratio < 0.0 or ratio > 1.0:
+                raise ValueError(f"Invalid candidate layer ratio spec: {s!r}")
+            lid = int(round(ratio * float(int(num_layers) - 1)))
+            lid = max(0, min(int(num_layers) - 1, lid))
+            if lid not in seen:
+                resolved.append(lid)
+                seen.add(lid)
+            continue
+
+        # 4) Numeric string:
+        # - integers => absolute indices (0-based, supports negative)
+        # - floats in [0, 1] => ratios
+        try:
+            lid = int(s)
+        except Exception:
+            lid = None
+        if lid is not None:
+            if lid < 0:
+                lid = int(num_layers) + lid
+            if lid < 0 or lid >= int(num_layers):
+                raise ValueError(f"candidate layer index out of range: {s!r} (num_layers={num_layers})")
+            if lid not in seen:
+                resolved.append(lid)
+                seen.add(lid)
+            continue
+
+        try:
+            f = float(s)
+        except Exception as e:
+            raise ValueError(f"Invalid candidate layer spec: {s!r}") from e
+        if not math.isfinite(f):
+            raise ValueError(f"Invalid candidate layer spec: {s!r}")
+
+        if 0.0 <= f <= 1.0:
+            lid = int(round(f * float(int(num_layers) - 1)))
+            lid = max(0, min(int(num_layers) - 1, lid))
+            if lid not in seen:
+                resolved.append(lid)
+                seen.add(lid)
+            continue
+        if abs(f - round(f)) < 1e-9:
+            lid = int(round(f))
+            if lid < 0:
+                lid = int(num_layers) + lid
+            if lid < 0 or lid >= int(num_layers):
+                raise ValueError(f"candidate layer index out of range: {s!r} (num_layers={num_layers})")
+            if lid not in seen:
+                resolved.append(lid)
+                seen.add(lid)
+            continue
+        raise ValueError(f"Invalid candidate layer ratio: {s!r} (expected float in [0, 1])")
+
+    if not resolved:
+        raise ValueError(f"offline_mine.candidate_layers resolved to empty list from specs={specs!r}")
+    return resolved
+
+
 def mine_candidates(cfg: ESMConfig) -> None:
     """
     Stage I: Mine candidate memory entries from contrastive rollouts.
@@ -109,10 +243,10 @@ def mine_candidates(cfg: ESMConfig) -> None:
         max_steer_vectors=8,
     )
     tokenizer = llm.get_tokenizer()
-    layers_raw = cfg.offline_mine.candidate_layers
-    layers: list[int] | None = None if layers_raw is None else [int(x) for x in layers_raw]
-    if layers is not None:
-        logger.info("Mining candidate layers: %s", layers)
+    layer_specs = cfg.offline_mine.candidate_layers
+    layers: list[int] | None = None
+    if layer_specs is not None:
+        logger.info("Mining candidate layer spec: %s", layer_specs)
 
     # 4) Rollout generation + memory-candidate mining with top-C heap
     # (quality, tie_breaker, meta, h_wrong, h_right, delta) - tie_breaker avoids dict comparison.
@@ -203,7 +337,7 @@ def mine_candidates(cfg: ESMConfig) -> None:
                     # require multiple segments, we pad a "gold completion" with neutral filler so that gold_gen_ids
                     # can cover all control points. This enables contrast mining even when correct rollouts are rare.
                     gold_text = str(ex.answer)
-                    if str(ex.task).lower() in {"aime_2024", "aime2024"}:
+                    if str(ex.task).lower() in {"aime_2024", "aime2024", "aime25", "aime_25", "aime_2025"}:
                         ans = str(ex.answer).strip() or "0"
                         prefix = "Let's think step by step.\n"
                         filler = "We compute carefully.\n"
@@ -384,9 +518,13 @@ def mine_candidates(cfg: ESMConfig) -> None:
                     continue
                 if layers is None:
                     n_layers = int(len(chunk_hidden_states[0]))
-                    start_layer = (2 * n_layers) // 3
-                    layers = list(range(start_layer, n_layers))
-                    logger.info("Mining candidate layers (top third): %s", layers)
+                    if layer_specs is None:
+                        start_layer = (2 * n_layers) // 3
+                        layers = list(range(start_layer, n_layers))
+                        logger.info("Mining candidate layers (top third): %s", layers)
+                    else:
+                        layers = _resolve_candidate_layers(list(layer_specs), num_layers=n_layers)
+                        logger.info("Mining candidate layers (resolved): %s (spec=%s)", layers, layer_specs)
                 assert layers is not None
 
                 for i, sample_layers in enumerate(chunk_hidden_states):

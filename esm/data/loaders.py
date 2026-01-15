@@ -59,7 +59,12 @@ def load_task_dataset(
     - We prefer HF datasets for convenience; if your environment is offline,
       consider setting HF mirror/caches or providing local jsonl (future extension).
     """
-    task = task.lower()
+    task = str(task).lower().strip()
+    # Be forgiving to path-like dataset names (common in local caches), e.g.:
+    # - "datasets/math-ai/amc23" -> "amc23"
+    # - "HuggingFaceH4/MATH-500" -> "math-500"
+    if "/" in task:
+        task = task.split("/")[-1]
     split = str(split)
     limit = int(max_examples) if max_examples is not None else None
 
@@ -164,6 +169,56 @@ def load_task_dataset(
                     question=q,
                     answer=a,
                     meta={"year": ex.get("year"), "url": ex.get("url")},
+                )
+            )
+            if limit is not None and len(rows) >= limit:
+                break
+        return _maybe_truncate(rows, max_examples)
+
+    if task in {"aime25", "aime_25", "aime_2025"}:
+        # Local AIME 2025 (math-ai/aime25/test.jsonl)
+        local = _maybe_local_path("math-ai/aime25/test.jsonl")
+        if not local:
+            raise FileNotFoundError(
+                "未找到本地 AIME25 jsonl。请确认存在 "
+                f"{(data_root or '<data_root>')}/math-ai/aime25/test.jsonl"
+            )
+        ds = _read_jsonl(local)
+        rows = []
+        for i, ex in enumerate(ds):
+            q = str(ex.get("problem", ex.get("question", "")))
+            a = str(ex.get("answer", ""))
+            rows.append(TaskExample(task="aime25", id=str(ex.get("id", i)), question=q, answer=a, meta={}))
+            if limit is not None and len(rows) >= limit:
+                break
+        return _maybe_truncate(rows, max_examples)
+
+    if task in {"amc23", "amc_23", "amc_2023"}:
+        # Local AMC 2023 (math-ai/amc23/test-*.parquet)
+        local = _maybe_local_path(f"math-ai/amc23/{split}-00000-of-00001.parquet")
+        if not local and data_root:
+            cand_dir = Path(data_root) / "math-ai" / "amc23"
+            if cand_dir.is_dir():
+                matches = sorted(cand_dir.glob(f"{split}-*.parquet"))
+                if matches:
+                    local = str(matches[0])
+        if not local:
+            raise FileNotFoundError(
+                "未找到本地 AMC23 parquet。请确认存在 "
+                f"{(data_root or '<data_root>')}/math-ai/amc23/{split}-00000-of-00001.parquet"
+            )
+        ds = _read_parquet(local)
+        rows = []
+        for i, ex in enumerate(ds):
+            q = str(ex.get("question", ""))
+            a = str(ex.get("answer", ""))
+            rows.append(
+                TaskExample(
+                    task="amc23",
+                    id=str(ex.get("id", i)),
+                    question=q,
+                    answer=a,
+                    meta={"url": ex.get("url")},
                 )
             )
             if limit is not None and len(rows) >= limit:

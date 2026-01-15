@@ -4,7 +4,7 @@ set -euo pipefail
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-CFG="${1:-configs/smoke_gsm8k_deepseek_1p5b.yaml}"
+CFG="${1:-configs/default}"
 # Default to GPU=1 (historical); override via env: GPU=0 ./scripts/run_smoke_...
 GPU="${GPU:-0}"
 
@@ -16,6 +16,29 @@ CONDA_ENV="${CONDA_ENV:-easysteer}"
 PY=(python)
 if [[ "${USE_CONDA_RUN}" == "1" ]]; then
   PY=(conda run -n "${CONDA_ENV}" python)
+fi
+
+if [[ ! -f "${CFG}" ]]; then
+  # Allow passing configs/default (no extension).
+  if [[ -f "${CFG}.yaml" ]]; then
+    CFG="${CFG}.yaml"
+  elif [[ -f "${CFG}.yml" ]]; then
+    CFG="${CFG}.yml"
+  fi
+fi
+
+ds="$("${PY[@]}" - "${CFG}" <<'PY'
+import sys
+
+from esm.config import load_config
+
+cfg = load_config(sys.argv[1])
+print(str(cfg.task.dataset))
+PY
+)"
+if [[ "${ds}" != "gsm8k" ]]; then
+  echo "[error] CFG task.dataset is '${ds}', expected 'gsm8k'. Please pass a gsm8k config (or edit configs/default)." >&2
+  exit 2
 fi
 
 run_stage() {

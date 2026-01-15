@@ -8,7 +8,7 @@ and enriches rows with model/dataset metadata from:
   outputs/<run_name>/<run_id>/config_resolved.json
 
 Typical usage:
-  python scripts/summarize_main_experiments.py --run-id 20260114_120000 --run-name-prefix main
+  python scripts/summarize_main_experiments.py --run-id 20260115_170749 --run-name-prefix main
   python scripts/summarize_main_experiments.py --run-name-prefix main --contains ds_r1_qwen_1p5b
 
 Default output:

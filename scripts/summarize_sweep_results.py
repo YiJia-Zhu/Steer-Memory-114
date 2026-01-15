@@ -2,13 +2,13 @@
 """
 Summarize grid / sweep runs under outputs/<run_name>/<run_id>/ into one CSV.
 
-This script is designed to work with the sweep scripts:
-- scripts/sweep_stage1_math500_deepseek_1p5b.sh
-- scripts/sweep_online_math500_deepseek_1p5b.sh
+This script is designed to work with sweep scripts like:
+- scripts/run_grid_sweep.sh
 
 Typical usage:
   python scripts/summarize_sweep_results.py --run-name gs_stage1_math500_deepseek_1p5b
   python scripts/summarize_sweep_results.py --run-name gs_online_math500_deepseek_1p5b
+  python scripts/summarize_sweep_results.py --run-name gs_full_math500_deepseek_1p5b
   - 只看某个 sweep_id（run_id 子串过滤）：
       - python scripts/summarize_sweep_results.py --run-name gs_online_math500_deepseek_1p5b --contains 20260114_120000
   - 指定输出路径：
@@ -336,7 +336,7 @@ def _build_row(
     base["offline_eta0"] = _safe_float(_get(cfg, "offline_mine.eta0"))
     cand_layers = _get(cfg, "offline_mine.candidate_layers")
     if isinstance(cand_layers, list):
-        base["offline_candidate_layers"] = ",".join(str(int(x)) for x in cand_layers if str(x).strip() != "")
+        base["offline_candidate_layers"] = ",".join(str(x).strip() for x in cand_layers if str(x).strip() != "")
     else:
         base["offline_candidate_layers"] = None
 
@@ -374,7 +374,7 @@ def _build_row(
             art_layers = _get(art_cfg, "offline_mine.candidate_layers")
             if isinstance(art_layers, list):
                 base["artifact_offline_candidate_layers"] = ",".join(
-                    str(int(x)) for x in art_layers if str(x).strip() != ""
+                    str(x).strip() for x in art_layers if str(x).strip() != ""
                 )
             else:
                 base["artifact_offline_candidate_layers"] = None

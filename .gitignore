@@ -1,10 +1,10 @@
 huggingface_models/*
 !huggingface_models/.gitkeep
 outputs
-logs/*
-!logs/.gitkeep
+logs
 configs/_grid_stage1_generated
 configs/_grid_online_generated
+configs/_grid_full_generated
 configs/_main_generated
 
 # Byte-compiled / optimized / DLL files

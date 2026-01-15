@@ -4,9 +4,56 @@ set -euo pipefail
 # =========================
 # User-editable (TOP)
 # =========================
-
 # GPUs to use for parallel runs (one job per GPU). Edit as needed.
-GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
+GPUS="${GPUS:-0,1}"
+
+# -------------------------
+# Models to run
+# Format: <model_key>|<name_or_path>|<tensor_parallel_size>
+# -------------------------
+MODEL_SPECS=(
+  "ds_r1_qwen_1p5b|huggingface_models/DeepSeek-R1-Distill-Qwen-1.5B|1"
+  "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1"
+  "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1"
+  "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1"
+)
+
+# -------------------------
+# Datasets to run (must be supported by esm/data/loaders.py and available locally)
+# Format:
+#   <dataset>|<prompt_template>|<train_split>|<eval_split>|<max_train>|<max_eval>|<T_max>|<max_model_len>
+#
+# Notes:
+# - T_max is a shorthand in this script for generation budget: decode.max_new_tokens (and offline_mine.max_new_tokens).
+# - max_model_len is the vLLM context window cap: prompt tokens + generated tokens (affects KV cache/memory).
+# - For long math reasoning datasets (e.g., aime/amc/aime25), set both to "__KEEP__" to follow configs/default.
+#
+# Use "__KEEP__" to keep the base-config value for that field.
+# -------------------------
+DATASET_SPECS=(
+  "math500|math_0shot|test|test|100|400|16384|16384"
+  "aime_2024|math_0shot|train|train|10|20|16384|16384"
+  "amc23|math_0shot|test|test|10|30|16384|16384"
+  "aime25|math_0shot|test|test|10|20|16384|16384"
+  "gsm8k|gsm8k_0shot|train|test|1000|null|2048|4096"
+  "arc-c|arc_0shot|train|validation|null|null|1024|4096" # 1.12k 299
+  "openbookqa|arc_0shot|train|validation|1000|null|1024|4096" # 4k 500 
+  "commonsense_qa|arc_0shot|train|validation|1000|null|1024|4096" # 9k 1k
+)
+# DATASET_SPECS=(
+#   "math500|math_0shot|test|test|10|10|16384|16384"
+#   "aime_2024|math_0shot|train|train|10|10|16384|16384"
+#   "amc23|math_0shot|test|test|10|10|16384|16384"
+#   "aime25|math_0shot|test|test|10|10|16384|16384"
+#   "gsm8k|gsm8k_0shot|train|test|10|10|2048|4096"
+#   "arc-c|arc_0shot|train|validation|10|10|1024|4096" # 1.12k 299
+#   "openbookqa|arc_0shot|train|validation|10|10|1024|4096" # 4k 500 
+#   "commonsense_qa|arc_0shot|train|validation|10|10|1024|4096" # 9k 1k
+# )
+
+# -------------------------
+# Runtime controls
+# -------------------------
 
 # Stages to run (comma-separated). Default: full pipeline.
 # Examples:
@@ -21,7 +68,7 @@ RUN_GREEDY="${RUN_GREEDY:-1}"
 RUN_ESM="${RUN_ESM:-1}"
 
 # Base config template. Per-job configs are generated from this file.
-BASE_CFG="${BASE_CFG:-configs/main_experiments_base.yaml}"
+BASE_CFG="${BASE_CFG:-configs/default}"
 
 # Outputs: each job uses run_name = <RUN_NAME_PREFIX>_<model_key>_<dataset_key>
 RUN_NAME_PREFIX="${RUN_NAME_PREFIX:-main}"
@@ -41,32 +88,6 @@ CONDA_ENV="${CONDA_ENV:-easysteer}"
 MAX_TRAIN_EXAMPLES="${MAX_TRAIN_EXAMPLES:-}"
 MAX_EVAL_EXAMPLES="${MAX_EVAL_EXAMPLES:-}"
 
-# -------------------------
-# Models to run
-# Format: <model_key>|<name_or_path>|<tensor_parallel_size>
-# -------------------------
-MODEL_SPECS=(
-  "ds_r1_qwen_1p5b|huggingface_models/DeepSeek-R1-Distill-Qwen-1.5B|1"
-  "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1"
-  # "llama3p2_3b|huggingface_models/Llama-3.2-3B-Instruct|1"
-)
-
-# -------------------------
-# Datasets to run (must be supported by esm/data/loaders.py and available locally)
-# Format:
-#   <dataset>|<prompt_template>|<train_split>|<eval_split>|<max_train>|<max_eval>|<T_max>|<max_model_len>
-#
-# Use "__KEEP__" to keep the base-config value for that field.
-# -------------------------
-DATASET_SPECS=(
-  "gsm8k|gsm8k_0shot|train|test|__KEEP__|__KEEP__|2048|4096"
-  "math500|math_0shot|test|test|__KEEP__|__KEEP__|4096|8192"
-  "aime_2024|gsm8k_0shot|train|train|__KEEP__|__KEEP__|4096|8192"
-  "arc-c|arc_0shot|train|validation|__KEEP__|__KEEP__|1024|4096"
-  "openbookqa|arc_0shot|train|validation|__KEEP__|__KEEP__|1024|4096"
-  "commonsense_qa|arc_0shot|train|validation|__KEEP__|__KEEP__|1024|4096"
-)
-
 # =========================
 
 export TOKENIZERS_PARALLELISM=false
@@ -77,6 +98,15 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY=(python)
 if [[ "${USE_CONDA_RUN}" == "1" ]]; then
   PY=(conda run -n "${CONDA_ENV}" python)
+fi
+
+if [[ ! -f "${BASE_CFG}" ]]; then
+  # Allow BASE_CFG=configs/default (no extension).
+  if [[ -f "${BASE_CFG}.yaml" ]]; then
+    BASE_CFG="${BASE_CFG}.yaml"
+  elif [[ -f "${BASE_CFG}.yml" ]]; then
+    BASE_CFG="${BASE_CFG}.yml"
+  fi
 fi
 
 if [[ ! -f "${BASE_CFG}" ]]; then

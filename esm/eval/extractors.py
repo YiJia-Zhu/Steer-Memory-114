@@ -60,7 +60,18 @@ def _extract_latex_braced_command_args(text: str, command: str) -> list[str]:
 
 def extract_pred(task: str, text: str) -> Optional[str]:
     task = task.lower()
-    if task in {"gsm8k", "svamp", "aime_2024", "aime2024"}:
+    if task in {
+        "gsm8k",
+        "svamp",
+        "aime_2024",
+        "aime2024",
+        "aime25",
+        "aime_25",
+        "aime_2025",
+        "amc23",
+        "amc_23",
+        "amc_2023",
+    }:
         m = _RE_HASH_ANSWER_NUM.findall(text)
         if m:
             return normalize_number_str(m[-1])
@@ -118,7 +129,16 @@ def extract_gold(task: str, gold_field: str) -> Optional[str]:
     if task == "svamp":
         # gold is usually already numeric
         return normalize_number_str(gold_field)
-    if task in {"aime_2024", "aime2024"}:
+    if task in {
+        "aime_2024",
+        "aime2024",
+        "aime25",
+        "aime_25",
+        "aime_2025",
+        "amc23",
+        "amc_23",
+        "amc_2023",
+    }:
         return normalize_number_str(gold_field)
     if task in {"arc-c", "arc_challenge", "arc", "openbookqa", "openbook_qa", "commonsense_qa", "commonsenseqa"}:
         return normalize_label(gold_field).upper()

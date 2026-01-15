@@ -76,7 +76,10 @@ class OfflineMineConfig:
     keep_top_C: int = 512
 
     # If None, use "top third layers" heuristic based on model depth.
-    candidate_layers: list[int] | None = None
+    # Supports:
+    # - absolute indices (0-based), e.g. [18]
+    # - ratios, e.g. ["1/5", "0.6"] (resolved at runtime based on model depth)
+    candidate_layers: list[int | str] | None = None
 
     # Quality knob: require contrast between correct and incorrect rollouts when mining.
     # When enabled, positives are drawn from correct rollouts and negatives from incorrect rollouts;
