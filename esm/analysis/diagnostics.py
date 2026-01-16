@@ -68,6 +68,7 @@ def write_eval_diagnostics(
     - outputs/<run>/tables/{out_prefix}diagnostics_T{T}.csv
     - outputs/<run>/tables/{out_prefix}diagnostics_T{T}.json
     - outputs/<run>/figures/{out_prefix}tokens_hist_T{T}.pdf
+    - outputs/<run>/figures/{out_prefix}tokens_hist_T{T}.csv
     """
     run_dir = Path(run_dir)
     out_tables = run_dir / "tables"
@@ -153,6 +154,7 @@ def write_eval_diagnostics(
     out_json = out_tables / f"{prefix}diagnostics_T{int(T_max)}.json"
     out_csv = out_tables / f"{prefix}diagnostics_T{int(T_max)}.csv"
     out_pdf = out_figs / f"{prefix}tokens_hist_T{int(T_max)}.pdf"
+    out_hist_csv = out_figs / f"{prefix}tokens_hist_T{int(T_max)}.csv"
 
     with out_json.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -162,6 +164,36 @@ def write_eval_diagnostics(
         w.writerow(list(asdict(dg).keys()))
         w.writerow(list(asdict(dg).values()))
         w.writerow(list(asdict(de).values()))
+
+    # CSV backing for tokens histogram (so users can re-plot without parsing JSONL).
+    with out_hist_csv.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(
+            [
+                "method",
+                "task",
+                "example_id",
+                "tokens_used",
+                "budget_used",
+                "probe_tokens_used",
+                "finish_reason",
+                "correct",
+            ]
+        )
+        for method, rows in (("greedy", greedy_rows), ("esm", esm_rows)):
+            for r in rows:
+                w.writerow(
+                    [
+                        str(method),
+                        r.get("task"),
+                        r.get("example_id"),
+                        int(r.get("tokens_used", 0) or 0),
+                        int(r.get("budget_used", 0) or 0),
+                        int(r.get("probe_tokens_used", 0) or 0),
+                        r.get("finish_reason"),
+                        bool(r.get("correct")),
+                    ]
+                )
 
     # Histogram plot (optional dependency)
     try:
@@ -195,5 +227,5 @@ def write_eval_diagnostics(
     except Exception as e:
         logger.warning("Skip diagnostics histogram (matplotlib unavailable): %s", e)
 
-    logger.info("Wrote diagnostics: %s %s", out_csv, out_json)
+    logger.info("Wrote diagnostics: %s %s %s", out_csv, out_json, out_hist_csv)
     return payload
