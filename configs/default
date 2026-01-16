@@ -20,7 +20,7 @@ model:
   dtype: "bfloat16"
   gpu_memory_utilization: 0.9
   max_model_len: 16384
-  max_num_seqs: 128
+  max_num_seqs: 256
 
 task:
   data_root: "datasets"
@@ -40,7 +40,7 @@ decode:
   logprobs: 1
 
 control_points:
-  M: 16
+  M: 8
 
 offline_mine:
   K: 8
@@ -59,7 +59,7 @@ offline_mine:
   pos_source: "rollout_or_gold"
 
 offline_select:
-  B: 512
+  B: 256
   lambda_diversity: 0.5
   epsilon: 0.0001
   method: "dpp"
