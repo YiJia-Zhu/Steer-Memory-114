@@ -5,18 +5,18 @@ set -euo pipefail
 # User-editable (TOP)
 # =========================
 # GPUs to use for parallel runs (one job per GPU). Edit as needed.
-GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
-# GPUS="${GPUS:-0,1}"
+# GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
+GPUS="${GPUS:-0,1}"
 
 # -------------------------
 # Models to run
 # Format: <model_key>|<name_or_path>|<tensor_parallel_size>|<max_num_seqs>
 # -------------------------
 MODEL_SPECS=(
-  "ds_r1_qwen_1p5b|huggingface_models/DeepSeek-R1-Distill-Qwen-1.5B|1|256"
-  "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1|256"
-  "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|128"
-  "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1|128"
+  "ds_r1_qwen_1p5b|huggingface_models/DeepSeek-R1-Distill-Qwen-1.5B|1|512"
+  "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1|512"
+  "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|256"
+  "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1|256"
 )
 
 # -------------------------
@@ -365,6 +365,15 @@ declare -A pid_to_name=()
 failed=0
 failed_jobs=()
 
+# Completion event queue (bash 4.x compatible replacement for `wait -n -p`).
+EVENT_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/main_experiments.${EXP_ID}.XXXXXX")"
+EVENT_FIFO="${EVENT_TMP_DIR}/events.fifo"
+mkfifo "${EVENT_FIFO}"
+cleanup_events() {
+  rm -rf "${EVENT_TMP_DIR}"
+}
+trap cleanup_events EXIT INT TERM
+
 start_job() {
   local gpu="$1"
   local name="$2"
@@ -377,8 +386,13 @@ start_job() {
   echo "  log: ${log_path}"
 
   (
+    set +e
     export CUDA_VISIBLE_DEVICES="${gpu}"
-    exec bash -lc "${cmd}"
+    bash -lc "${cmd}"
+    rc=$?
+    # Use BASHPID (not $$) so the parent can match `$!`.
+    printf '%s %s\n' "${BASHPID}" "${rc}" >"${EVENT_FIFO}"
+    exit "${rc}"
   ) >"${log_path}" 2>&1 &
 
   local pid="$!"
@@ -403,11 +417,15 @@ while [[ "${#queue[@]}" -gt 0 || "${#pid_to_gpu[@]}" -gt 0 ]]; do
   if [[ "${#pid_to_gpu[@]}" -gt 0 ]]; then
     done_pid=""
     rc=0
-    if wait -n -p done_pid; then
-      rc=0
+    # Block until any job finishes and reports "<pid> <rc>".
+    if IFS=' ' read -r done_pid rc <"${EVENT_FIFO}"; then
+      :
     else
-      rc=$?
+      echo "[error] failed to read job completion event" >&2
+      exit 2
     fi
+    # Reap to avoid zombies (ignore wait rc; we already captured rc).
+    wait "${done_pid}" >/dev/null 2>&1 || true
 
     if [[ -n "${done_pid}" ]]; then
       gpu="${pid_to_gpu[${done_pid}]}"

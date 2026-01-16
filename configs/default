@@ -40,7 +40,7 @@ decode:
   logprobs: 1
 
 control_points:
-  M: 64
+  M: 16
 
 offline_mine:
   K: 8

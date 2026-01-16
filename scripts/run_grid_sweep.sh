@@ -419,6 +419,15 @@ declare -A pid_to_job=()
 failed=0
 failed_jobs=()
 
+# Completion event queue (bash 4.x compatible replacement for `wait -n -p`).
+EVENT_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/grid_sweep.${SWEEP_ID}.XXXXXX")"
+EVENT_FIFO="${EVENT_TMP_DIR}/events.fifo"
+mkfifo "${EVENT_FIFO}"
+cleanup_events() {
+  rm -rf "${EVENT_TMP_DIR}"
+}
+trap cleanup_events EXIT INT TERM
+
 start_job() {
   local gpu_ids="$1"
   local job="$2"
@@ -431,8 +440,13 @@ start_job() {
   echo "  log: ${log_path}"
 
   (
+    set +e
     export CUDA_VISIBLE_DEVICES="${gpu_ids}"
-    exec bash -lc "${cmd}"
+    bash -lc "${cmd}"
+    rc=$?
+    # Use BASHPID (not $$) so the parent can match `$!`.
+    printf '%s %s\n' "${BASHPID}" "${rc}" >"${EVENT_FIFO}"
+    exit "${rc}"
   ) >"${log_path}" 2>&1 &
 
   local pid="$!"
@@ -477,11 +491,15 @@ while [[ "${#queue[@]}" -gt 0 || "${#pid_to_gpus[@]}" -gt 0 ]]; do
   if [[ "${#pid_to_gpus[@]}" -gt 0 ]]; then
     done_pid=""
     rc=0
-    if wait -n -p done_pid; then
-      rc=0
+    # Block until any job finishes and reports "<pid> <rc>".
+    if IFS=' ' read -r done_pid rc <"${EVENT_FIFO}"; then
+      :
     else
-      rc=$?
+      echo "[error] failed to read job completion event" >&2
+      exit 2
     fi
+    # Reap to avoid zombies (ignore wait rc; we already captured rc).
+    wait "${done_pid}" >/dev/null 2>&1 || true
 
     if [[ -n "${done_pid}" ]]; then
       gpu_ids="${pid_to_gpus[${done_pid}]}"
