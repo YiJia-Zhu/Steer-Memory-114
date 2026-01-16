@@ -51,7 +51,7 @@ offline_mine:
   top_p: 0.95
   candidate_layers: [0.6]
   max_new_tokens: 16384
-  eta0: 0.001
+  eta0: 0.01
   keep_top_C: 128
   require_correct_and_incorrect: true
   min_correct_rollouts: 1
