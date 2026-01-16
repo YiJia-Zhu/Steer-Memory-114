@@ -59,7 +59,7 @@ offline_mine:
   pos_source: "rollout_or_gold"
 
 offline_select:
-  B: 2048
+  B: 512
   lambda_diversity: 0.5
   epsilon: 0.0001
   method: "dpp"
