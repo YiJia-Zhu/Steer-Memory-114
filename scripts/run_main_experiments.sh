@@ -5,8 +5,8 @@ set -euo pipefail
 # User-editable (TOP)
 # =========================
 # GPUs to use for parallel runs (one job per GPU). Edit as needed.
-# GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
-GPUS="${GPUS:-0,1}"
+GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
+# GPUS="${GPUS:-0,1}"
 
 # -------------------------
 # Models to run
