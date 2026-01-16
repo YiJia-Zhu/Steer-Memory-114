@@ -35,10 +35,10 @@ DATASET_SPECS=(
   "aime_2024|math_0shot|train|train|10|20|16384|16384"
   "amc23|math_0shot|test|test|10|30|16384|16384"
   "aime25|math_0shot|test|test|10|20|16384|16384"
-  "gsm8k|gsm8k_0shot|train|test|100|null|2048|4096"
   "arc-c|arc_0shot|train|validation|100|null|1024|4096" # 1.12k 299
   "openbookqa|arc_0shot|train|validation|100|null|1024|4096" # 4k 500 
-  "commonsense_qa|arc_0shot|train|validation|100|null|1024|4096" # 9k 1k
+  # "gsm8k|gsm8k_0shot|train|test|100|null|2048|4096"
+  # "commonsense_qa|arc_0shot|train|validation|100|null|1024|4096" # 9k 1k
 )
 
 # DATASET_SPECS=(
