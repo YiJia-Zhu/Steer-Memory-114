@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set -m
 
 # =========================
 # User-editable (TOP)
@@ -426,7 +427,45 @@ mkfifo "${EVENT_FIFO}"
 cleanup_events() {
   rm -rf "${EVENT_TMP_DIR}"
 }
-trap cleanup_events EXIT INT TERM
+
+terminate_requested=0
+terminate_jobs() {
+  local pids=("${!pid_to_gpus[@]}")
+  if (( ${#pids[@]} == 0 )); then
+    return
+  fi
+  echo "[signal] terminating ${#pids[@]} running job(s)..." >&2
+  for pid in "${pids[@]}"; do
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill -TERM -- "-${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null || true
+    fi
+  done
+  sleep 1
+  for pid in "${pids[@]}"; do
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill -KILL -- "-${pid}" 2>/dev/null || kill -KILL "${pid}" 2>/dev/null || true
+    fi
+  done
+}
+on_signal() {
+  local sig="$1"
+  if [[ "${terminate_requested}" == "1" ]]; then
+    exit 1
+  fi
+  terminate_requested=1
+  echo "[signal] ${sig} received; terminating running jobs..." >&2
+  terminate_jobs
+  if [[ "${sig}" == "INT" ]]; then
+    exit 130
+  fi
+  if [[ "${sig}" == "TERM" ]]; then
+    exit 143
+  fi
+  exit 1
+}
+trap cleanup_events EXIT
+trap 'on_signal INT' INT
+trap 'on_signal TERM' TERM
 
 start_job() {
   local gpu_ids="$1"
