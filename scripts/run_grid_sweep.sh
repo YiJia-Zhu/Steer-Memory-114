@@ -13,10 +13,10 @@ GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
 # Format: <model_key>|<name_or_path>|<tensor_parallel_size>|<max_num_seqs>
 # -------------------------
 MODEL_SPECS=(
-  "ds_r1_qwen_1p5b|huggingface_models/DeepSeek-R1-Distill-Qwen-1.5B|1|256"
-  "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1|256"
-  "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|128"
-  "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1|128"
+  "ds_r1_qwen_1p5b|huggingface_models/DeepSeek-R1-Distill-Qwen-1.5B|1|512"
+  "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1|512"
+  "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|256"
+  "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1|256"
 )
 
 # -------------------------
