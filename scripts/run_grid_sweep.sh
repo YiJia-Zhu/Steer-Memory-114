@@ -15,9 +15,9 @@ GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
 # -------------------------
 MODEL_SPECS=(
   "ds_r1_qwen_1p5b|huggingface_models/DeepSeek-R1-Distill-Qwen-1.5B|1|512"
-  "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1|512"
-  "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|256"
-  "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1|256"
+  # "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1|512"
+  # "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|256"
+  # "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1|256"
 )
 
 # -------------------------
@@ -56,18 +56,18 @@ DATASET_SPECS=(
 # Total points = |MODEL_SPECS| * |DATASET_SPECS| * |LAYER_LIST| * |ETA0_LIST| * |KSCALE_LIST|
 # -------------------------
 
-# 提取/注入的层数：支持比例（适配不同模型层数），如 1/5 或 0.6（注意：整数如 1 会被当作绝对层号 1）
-LAYER_LIST=(0.2 0.4 0.6 0.8)
-# Reward 函数中回答长度权重
-ETA0_LIST=(0 0.01 0.1)
-# 注入强度
-KSCALE_LIST=(0.25 0.5 0.75 1.0)
-
-# LAYER_LIST=(0.8)
+# # 提取/注入的层数：支持比例（适配不同模型层数），如 1/5 或 0.6（注意：整数如 1 会被当作绝对层号 1）
+# LAYER_LIST=(0.2 0.4 0.6 0.8)
 # # Reward 函数中回答长度权重
-# ETA0_LIST=(0)
+# ETA0_LIST=(0 0.01 0.1)
 # # 注入强度
-# KSCALE_LIST=(0.25)
+# KSCALE_LIST=(0.25 0.5 0.75 1.0)
+
+LAYER_LIST=(0.8)
+# Reward 函数中回答长度权重
+ETA0_LIST=(0.1)
+# 注入强度
+KSCALE_LIST=(1.0)
 
 # -------------------------
 # Runtime controls
