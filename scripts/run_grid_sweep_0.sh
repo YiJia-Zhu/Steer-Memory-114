@@ -61,7 +61,7 @@ LAYER_LIST=(0.2)
 # Reward 函数中回答长度权重
 ETA0_LIST=(0.01)
 # 注入强度
-KSCALE_LIST=(0.25 0.5)
+KSCALE_LIST=(0.05 0.1)
 
 # LAYER_LIST=(0.8)
 # # Reward 函数中回答长度权重
