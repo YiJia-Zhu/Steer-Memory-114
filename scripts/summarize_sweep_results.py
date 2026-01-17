@@ -85,6 +85,47 @@ _RE_BUDGET_USED = re.compile(r"\"budget_used\"\s*:\s*(\d+)")
 _RE_PROBE_USED = re.compile(r"\"probe_tokens_used\"\s*:\s*(\d+)")
 _RE_FINISH_REASON = re.compile(r"\"finish_reason\"\s*:\s*(null|\"(?:\\\\.|[^\"])*\")")
 
+_MODEL_NAME_MAP = {
+    "deepseek-r1-distill-qwen-1.5b": "DeepSeek-R1-Distill-Qwen-1.5B",
+    "deepseek-r1-distill-qwen-7b": "DeepSeek-R1-Distill-Qwen-7B",
+    "ds-r1-qwen-1.5b": "DeepSeek-R1-Distill-Qwen-1.5B",
+    "ds-r1-qwen-7b": "DeepSeek-R1-Distill-Qwen-7B",
+    "qwen2.5-3b-instruct": "Qwen2.5-3B-Instruct",
+    "qwen2.5-7b-instruct": "Qwen2.5-7B-Instruct",
+    "qwen2.5-3b": "Qwen2.5-3B-Instruct",
+    "qwen2.5-7b": "Qwen2.5-7B-Instruct",
+}
+
+
+def _normalize_model_key(s: str) -> str:
+    low = s.strip().lower()
+    low = low.replace("\\", "/")
+    low = low.replace("_", "-")
+    low = low.replace(" ", "")
+    low = low.replace("2p5", "2.5")
+    low = low.replace("1p5", "1.5")
+    low = re.sub(r"-+", "-", low)
+    return low
+
+
+def _canonical_model_name(raw: Any, *, fallback_texts: list[str] | None = None) -> str | None:
+    if raw is not None:
+        s = str(raw).strip()
+        if s:
+            name = s.replace("\\", "/").split("/")[-1]
+            key = _normalize_model_key(name)
+            canon = _MODEL_NAME_MAP.get(key)
+            return canon if canon is not None else name
+    if fallback_texts:
+        for text in fallback_texts:
+            if not text:
+                continue
+            key = _normalize_model_key(str(text))
+            for alias, canon in _MODEL_NAME_MAP.items():
+                if alias in key:
+                    return canon
+    return None
+
 
 def _percentile_int(xs: list[int], p: float) -> int | None:
     if not xs:
@@ -287,6 +328,10 @@ def _build_row(
     if cfg is None:
         base["status"] = "missing_config"
         cfg = {}
+
+    raw_model = _get(cfg, "model.name_or_path")
+    base["model"] = raw_model
+    base["models"] = _canonical_model_name(raw_model, fallback_texts=[run_name, run_id])
 
     # Eval summary (ESM only).
     summary_path, summary = _find_eval_summary(run_dir)

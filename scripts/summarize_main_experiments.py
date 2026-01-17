@@ -79,6 +79,47 @@ _RE_PROBE_USED = re.compile(r"\"probe_tokens_used\"\s*:\s*(\d+)")
 _RE_FINISH_REASON = re.compile(r"\"finish_reason\"\s*:\s*(null|\"(?:\\\\.|[^\"])*\")")
 _RE_EVAL_METHOD_T = re.compile(r"^(?P<method>[A-Za-z0-9_-]+)_T(?P<T>\d+)$")
 
+_MODEL_NAME_MAP = {
+    "deepseek-r1-distill-qwen-1.5b": "DeepSeek-R1-Distill-Qwen-1.5B",
+    "deepseek-r1-distill-qwen-7b": "DeepSeek-R1-Distill-Qwen-7B",
+    "ds-r1-qwen-1.5b": "DeepSeek-R1-Distill-Qwen-1.5B",
+    "ds-r1-qwen-7b": "DeepSeek-R1-Distill-Qwen-7B",
+    "qwen2.5-3b-instruct": "Qwen2.5-3B-Instruct",
+    "qwen2.5-7b-instruct": "Qwen2.5-7B-Instruct",
+    "qwen2.5-3b": "Qwen2.5-3B-Instruct",
+    "qwen2.5-7b": "Qwen2.5-7B-Instruct",
+}
+
+
+def _normalize_model_key(s: str) -> str:
+    low = s.strip().lower()
+    low = low.replace("\\", "/")
+    low = low.replace("_", "-")
+    low = low.replace(" ", "")
+    low = low.replace("2p5", "2.5")
+    low = low.replace("1p5", "1.5")
+    low = re.sub(r"-+", "-", low)
+    return low
+
+
+def _canonical_model_name(raw: Any, *, fallback_texts: list[str] | None = None) -> str | None:
+    if raw is not None:
+        s = str(raw).strip()
+        if s:
+            name = s.replace("\\", "/").split("/")[-1]
+            key = _normalize_model_key(name)
+            canon = _MODEL_NAME_MAP.get(key)
+            return canon if canon is not None else name
+    if fallback_texts:
+        for text in fallback_texts:
+            if not text:
+                continue
+            key = _normalize_model_key(str(text))
+            for alias, canon in _MODEL_NAME_MAP.items():
+                if alias in key:
+                    return canon
+    return None
+
 
 def _read_token_stats_from_per_example(per_example_path: Path, *, T_max: int | None) -> dict[str, Any]:
     """
@@ -263,12 +304,15 @@ class Row:
 
 def _build_row(run_dir: Path) -> Row:
     cfg = _load_json(run_dir / "config_resolved.json") or {}
+    raw_model = (cfg.get("model") or {}).get("name_or_path")
+    model_name = _canonical_model_name(raw_model, fallback_texts=[run_dir.parent.name, run_dir.name])
     base: dict[str, Any] = {
         "run_name": run_dir.parent.name,
         "run_id": run_dir.name,
         "run_dir": str(run_dir),
         "status": "ok",
-        "model": (cfg.get("model") or {}).get("name_or_path"),
+        "model": raw_model,
+        "models": model_name,
         "tensor_parallel_size": (cfg.get("model") or {}).get("tensor_parallel_size"),
         "dataset": (cfg.get("task") or {}).get("dataset"),
         "train_split": (cfg.get("task") or {}).get("train_split"),
