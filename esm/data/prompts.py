@@ -59,10 +59,7 @@ def render_user_prompt(ex: TaskExample, template: str) -> str:
         # )
         return (
             "Solve the following problem step by step.\n"
-            "You MUST explain your reasoning before giving the final answer.\n"
-            "Write the reasoning in a section titled 'Reasoning'.\n"
-            "The 'Reasoning' section should contain multiple steps and cannot be empty.\n"
-            "Do NOT skip directly to the final answer.\n\n"
+            "You MUST explain your reasoning before giving the final choice.\n"
             "After the reasoning, choose the correct option (A, B, C, D, or E).\n"
             "Put only the chosen letter on the last line in the format:\n"
             "#### <A/B/C/D/E>\n\n"
@@ -75,8 +72,8 @@ def render_user_prompt(ex: TaskExample, template: str) -> str:
     if template in {"strategyqa_0shot"}:
         return (
             "Solve the following problem step by step.\n"
-            "You should show intermediate steps.\n"
-            "Answer the question with Yes or No.\n"
+            "You MUST show intermediate steps.\n"
+            "After the reasoning, answer the question with Yes or No.\n"
             "Put only the final label on the last line in the format:\n"
             "#### <Yes/No>\n\n"
             "Question:\n"
