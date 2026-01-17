@@ -150,8 +150,32 @@ if [[ ! "${RESUME_FROM}" =~ ^[0-9]+$ ]]; then
 fi
 
 OUT_CFG_DIR="${OUT_CFG_DIR:-configs/_main_generated/${EXP_ID}}"
-LOG_DIR="${LOG_DIR:-logs/main_${EXP_ID}}"
-mkdir -p "${OUT_CFG_DIR}" "${LOG_DIR}"
+LOG_DIR="${LOG_DIR:-}"
+
+OUTPUTS_ROOT="$(
+  BASE_CFG="${BASE_CFG}" "${PY[@]}" - <<'PY'
+import os
+from pathlib import Path
+
+import yaml
+
+base_cfg = Path(os.environ["BASE_CFG"])
+raw = yaml.safe_load(base_cfg.read_text(encoding="utf-8")) or {}
+root = (raw.get("outputs") or {}).get("root_dir") or "outputs"
+print(Path(root).expanduser())
+PY
+)"
+if [[ -z "${OUTPUTS_ROOT}" ]]; then
+  OUTPUTS_ROOT="outputs"
+fi
+if [[ "${OUTPUTS_ROOT}" != /* ]]; then
+  OUTPUTS_ROOT="${REPO_ROOT}/${OUTPUTS_ROOT}"
+fi
+
+mkdir -p "${OUT_CFG_DIR}"
+if [[ -n "${LOG_DIR}" ]]; then
+  mkdir -p "${LOG_DIR}"
+fi
 
 sanitize() {
   local s="$1"
@@ -348,7 +372,12 @@ echo "[n_datasets] ${n_datasets}"
 echo "[n_jobs_total] ${total_jobs}"
 echo "[n_jobs] ${#jobs[@]}"
 echo "[out_cfg_dir] ${OUT_CFG_DIR}"
-echo "[log_dir] ${LOG_DIR}"
+echo "[outputs_root] ${OUTPUTS_ROOT}"
+if [[ -n "${LOG_DIR}" ]]; then
+  echo "[log_dir] ${LOG_DIR}"
+else
+  echo "[log_dir] per-run (outputs/<run_name>/<run_id>/logs/stdout.log)"
+fi
 echo
 
 if (( ${#jobs[@]} == 0 )); then
@@ -419,7 +448,19 @@ start_job() {
   local name="$2"
   local cfg="$3"
   local cmd="$4"
-  local log_path="${LOG_DIR}/${name}.log"
+  local run_name="$5"
+  local run_id="$6"
+  local log_path=""
+
+  if [[ -n "${LOG_DIR}" ]]; then
+    log_path="${LOG_DIR}/${name}.log"
+    mkdir -p "${LOG_DIR}"
+  else
+    local run_dir="${OUTPUTS_ROOT}/${run_name}/${run_id}"
+    local run_logs="${run_dir}/logs"
+    mkdir -p "${run_logs}"
+    log_path="${run_logs}/stdout.log"
+  fi
 
   echo "[start][gpu=${gpu}] ${name}"
   echo "  cfg: ${cfg}"
@@ -451,7 +492,7 @@ while [[ "${#queue[@]}" -gt 0 || "${#pid_to_gpu[@]}" -gt 0 ]]; do
 
     IFS='|' read -r idx name cfg cmd <<< "${job}"
     safe_name="$(printf "%05d__%s" "${idx}" "${name}")"
-    start_job "${gpu}" "${safe_name}" "${cfg}" "${cmd}"
+    start_job "${gpu}" "${safe_name}" "${cfg}" "${cmd}" "${name}" "${EXP_ID}"
   done
 
   if [[ "${#pid_to_gpu[@]}" -gt 0 ]]; then

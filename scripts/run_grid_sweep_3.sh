@@ -179,8 +179,32 @@ if [[ ! "${RESUME_FROM}" =~ ^[0-9]+$ ]]; then
 fi
 
 OUT_CFG_DIR="${OUT_CFG_DIR:-configs/_grid_full_generated/${SWEEP_ID}}"
-LOG_DIR="${LOG_DIR:-logs/grid_full_${SWEEP_ID}}"
-mkdir -p "${OUT_CFG_DIR}" "${LOG_DIR}"
+LOG_DIR="${LOG_DIR:-}"
+
+OUTPUTS_ROOT="$(
+  BASE_CFG="${BASE_CFG}" "${PY[@]}" - <<'PY'
+import os
+from pathlib import Path
+
+import yaml
+
+base_cfg = Path(os.environ["BASE_CFG"])
+raw = yaml.safe_load(base_cfg.read_text(encoding="utf-8")) or {}
+root = (raw.get("outputs") or {}).get("root_dir") or "outputs"
+print(Path(root).expanduser())
+PY
+)"
+if [[ -z "${OUTPUTS_ROOT}" ]]; then
+  OUTPUTS_ROOT="outputs"
+fi
+if [[ "${OUTPUTS_ROOT}" != /* ]]; then
+  OUTPUTS_ROOT="${REPO_ROOT}/${OUTPUTS_ROOT}"
+fi
+
+mkdir -p "${OUT_CFG_DIR}"
+if [[ -n "${LOG_DIR}" ]]; then
+  mkdir -p "${LOG_DIR}"
+fi
 
 sanitize() {
   local s="$1"
@@ -400,7 +424,12 @@ echo "[n_datasets] ${n_datasets}"
 echo "[grid_size] ${grid_size}"
 echo "[n_jobs] ${#jobs[@]}"
 echo "[out_cfg_dir] ${OUT_CFG_DIR}"
-echo "[log_dir] ${LOG_DIR}"
+echo "[outputs_root] ${OUTPUTS_ROOT}"
+if [[ -n "${LOG_DIR}" ]]; then
+  echo "[log_dir] ${LOG_DIR}"
+else
+  echo "[log_dir] per-run (outputs/<run_name>/<run_id>/logs/stdout.log)"
+fi
 echo
 
 if (( ${#jobs[@]} == 0 )); then
@@ -471,7 +500,19 @@ start_job() {
   local job="$2"
   local cfg="$3"
   local cmd="$4"
-  local log_path="${LOG_DIR}/${job}.log"
+  local run_name="$5"
+  local run_id="$6"
+  local log_path=""
+
+  if [[ -n "${LOG_DIR}" ]]; then
+    log_path="${LOG_DIR}/${job}.log"
+    mkdir -p "${LOG_DIR}"
+  else
+    local run_dir="${OUTPUTS_ROOT}/${run_name}/${run_id}"
+    local run_logs="${run_dir}/logs"
+    mkdir -p "${run_logs}"
+    log_path="${run_logs}/stdout.log"
+  fi
 
   echo "[start][gpu=${gpu_ids}] ${job}"
   echo "  cfg: ${cfg}"
@@ -515,7 +556,7 @@ while [[ "${#queue[@]}" -gt 0 || "${#pid_to_gpus[@]}" -gt 0 ]]; do
 
         # Remove this job from queue.
         queue=( "${queue[@]:0:${i}}" "${queue[@]:$((i + 1))}" )
-        start_job "${gpu_ids}" "${safe_job_name}" "${cfg}" "${cmd}"
+        start_job "${gpu_ids}" "${safe_job_name}" "${cfg}" "${cmd}" "${run_name}" "${rid}"
         found=1
         started_any=1
         break

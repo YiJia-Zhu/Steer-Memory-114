@@ -46,10 +46,23 @@ def render_user_prompt(ex: TaskExample, template: str) -> str:
             if lab in options:
                 lines.append(f"({lab}) {options[lab]}")
         opts_block = "\n".join(lines)
+        # return (
+        #     "Solve the following problem step by step.\n"
+        #     "You should show intermediate steps.\n"
+        #     "Choose the correct option (A, B, C, or D).\n"
+        #     "Put only the chosen letter on the last line in the format:\n"
+        #     "#### <A/B/C/D/E>\n\n"
+        #     "Question:\n"
+        #     f"{ex.question}\n\n"
+        #     "Options:\n"
+        #     f"{opts_block}\n"
+        # )
         return (
             "Solve the following problem step by step.\n"
-            "You should show intermediate steps.\n"
-            "Choose the correct option (A, B, C, or D).\n"
+            "You MUST explain your reasoning before giving the final choice.\n"
+            "The 'Reasoning' section should contain multiple steps and cannot be empty.\n"
+            "Do NOT skip directly to the final answer.\n\n"
+            "After the reasoning, choose the correct option (A, B, C, D, or E).\n"
             "Put only the chosen letter on the last line in the format:\n"
             "#### <A/B/C/D/E>\n\n"
             "Question:\n"
@@ -61,7 +74,7 @@ def render_user_prompt(ex: TaskExample, template: str) -> str:
     if template in {"strategyqa_0shot"}:
         return (
             "Solve the following problem step by step.\n"
-            "You should show intermediate steps.\n"
+            "You MUST show intermediate steps.\n"
             "Answer the question with Yes or No.\n"
             "Put only the final label on the last line in the format:\n"
             "#### <Yes/No>\n\n"
