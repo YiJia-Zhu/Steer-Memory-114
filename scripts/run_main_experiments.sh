@@ -2,13 +2,13 @@
 set -euo pipefail
 set -m
 # Only baseline
-# RUN_GREEDY=1 RUN_ESM=0 STAGES=eval ./scripts/run_main_experiments.sh 
+# RUN_GREEDY=1 RUN_ESM=0 STAGES=eval bash ./scripts/run_main_experiments.sh 
 # =========================
 # User-editable (TOP)
 # =========================
 # GPUs to use for parallel runs (one job per GPU). Edit as needed.
-GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
-# GPUS="${GPUS:-0,1}"
+# GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
+GPUS="${GPUS:-0}"
 
 # -------------------------
 # Models to run
@@ -16,9 +16,9 @@ GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
 # -------------------------
 MODEL_SPECS=(
   "ds_r1_qwen_1p5b|huggingface_models/DeepSeek-R1-Distill-Qwen-1.5B|1|512"
-  "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1|512"
-  "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|256"
-  "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1|256"
+  # "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1|512"
+  # "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|256"
+  # "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1|256"
 )
 
 # -------------------------
@@ -35,11 +35,11 @@ MODEL_SPECS=(
 # -------------------------
 DATASET_SPECS=(
   "math500|math_0shot|test|test|100|400|16384|16384"
-  "aime_2024|math_0shot|train|train|10|20|16384|16384"
-  "amc23|math_0shot|test|test|10|30|16384|16384"
-  "aime25|math_0shot|test|test|10|20|16384|16384"
-  "arc-c|arc_0shot|train|validation|100|null|1024|4096" # 1.12k 299
-  "openbookqa|arc_0shot|train|validation|100|null|1024|4096" # 4k 500 
+  # "aime_2024|math_0shot|train|train|10|20|16384|16384"
+  # "amc23|math_0shot|test|test|10|30|16384|16384"
+  # "aime25|math_0shot|test|test|10|20|16384|16384"
+  # "arc-c|arc_0shot|train|validation|100|null|1024|4096" # 1.12k 299
+  # "openbookqa|arc_0shot|train|validation|100|null|1024|4096" # 4k 500 
   # "gsm8k|gsm8k_0shot|train|test|100|null|2048|4096"
   # "commonsense_qa|arc_0shot|train|validation|100|null|1024|4096" # 9k 1k
 )

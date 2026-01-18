@@ -9,7 +9,7 @@ and enriches rows with model/dataset metadata from:
 
 Typical usage:
   python scripts/summarize_main_experiments.py --run-id 20260116_192320 --run-name-prefix main
-  python scripts/summarize_main_experiments.py --run-name-prefix main --contains ds_r1_qwen_1p5b
+  python scripts/summarize_main_experiments.py --run-name-prefix grid --contains ds_r1_qwen_1p5b
 
 Default output:
   outputs/_main/<run_id>/main_summary.csv   (when --run-id is provided)

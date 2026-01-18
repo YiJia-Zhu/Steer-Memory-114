@@ -13,8 +13,15 @@ _RE_HASH_ANSWER_LETTER = re.compile(r"####\s*([A-E])", re.IGNORECASE | re.MULTIL
 _RE_LAST_LETTER = re.compile(r"\b([A-E])\b")
 
 _RE_HASH_YN = re.compile(r"####\s*(yes|no)", re.IGNORECASE | re.MULTILINE)
-_RE_ANSWER_LINE = re.compile(r"(?im)^(?:final\s+answer|answer)\s*[:=]\s*(.+?)\s*$")
-_RE_ANSWER_INLINE = re.compile(r"(?i)(?:final\s+answer|answer)\s*(?:is|=|:)\s*([^\n]+)")
+_RE_ANSWER_LINE = re.compile(
+    r"(?im)^\s*[*_`]*\s*(?:final\s+answer|answer)\s*[*_`]*\s*[:=]\s*(.+?)\s*$"
+)
+_RE_ANSWER_MARKER_ONLY = re.compile(
+    r"(?im)^\s*[*_`]*\s*(?:final\s+answer|answer)\s*[*_`]*\s*[:=]?\s*[*_`]*\s*$"
+)
+_RE_ANSWER_INLINE = re.compile(
+    r"(?i)(?:final\s+answer|answer)\s*[*_`]*\s*(?:is|=|:)\s*([^\n]+)"
+)
 
 
 def _extract_latex_braced_command_args(text: str, command: str) -> list[str]:
@@ -103,9 +110,21 @@ def extract_pred(task: str, text: str) -> Optional[str]:
         boxed = _extract_latex_braced_command_args(text, "boxed")
         if boxed:
             return normalize_math_answer(boxed[-1])
-        ans_lines = _RE_ANSWER_LINE.findall(text)
-        if ans_lines:
-            return normalize_math_answer(ans_lines[-1])
+        lines = [ln for ln in str(text).splitlines() if ln.strip()]
+        for i, ln in enumerate(lines):
+            m = _RE_ANSWER_LINE.match(ln)
+            if m:
+                ans = m.group(1).strip()
+                if ans:
+                    norm = normalize_math_answer(ans)
+                    if norm:
+                        return norm
+            if _RE_ANSWER_MARKER_ONLY.match(ln):
+                for j in range(i + 1, len(lines)):
+                    nxt = lines[j].strip()
+                    if nxt:
+                        return normalize_math_answer(nxt)
+                break
         ans_inline = _RE_ANSWER_INLINE.findall(text)
         if ans_inline:
             return normalize_math_answer(ans_inline[-1])

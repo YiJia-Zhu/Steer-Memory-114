@@ -37,6 +37,41 @@ def normalize_number_str(s: str) -> str:
 _RE_LATEX_INLINE_MATH = re.compile(r"^\s*\$+(.*?)\$+\s*$", re.DOTALL)
 _RE_LATEX_PARENS_MATH = re.compile(r"^\s*\\\((.*?)\\\)\s*$", re.DOTALL)
 _RE_LATEX_BRACKETS_MATH = re.compile(r"^\s*\\\[(.*?)\\\]\s*$", re.DOTALL)
+_RE_LATEX_INLINE_ANY = re.compile(r"\\\((.*?)\\\)", re.DOTALL)
+_RE_LATEX_BRACKETS_ANY = re.compile(r"\\\[(.*?)\\\]", re.DOTALL)
+_RE_LATEX_DOLLAR_ANY = re.compile(r"\$(.+?)\$", re.DOTALL)
+_SENTENCE_WORD_RE = re.compile(
+    r"(?i)(?<!\\)\b(?!sqrt\b|frac\b|pi\b|sin\b|cos\b|tan\b|log\b|ln\b|exp\b|sec\b|csc\b|cot\b)[a-z]{3,}\b"
+)
+
+_UNIT_WORDS = {
+    "unit",
+    "units",
+    "cm",
+    "mm",
+    "km",
+    "inch",
+    "inches",
+    "ft",
+    "feet",
+    "yd",
+    "yard",
+    "yards",
+    "mile",
+    "miles",
+    "degree",
+    "degrees",
+    "deg",
+    "radian",
+    "radians",
+    "rad",
+    "percent",
+    "pct",
+    "dollar",
+    "dollars",
+    "usd",
+}
+_UNIT_SUFFIXES_NOSPACE = sorted({u for u in _UNIT_WORDS if len(u) > 1 and u.isalpha()}, key=len, reverse=True)
 
 
 def _extract_balanced_braces(s: str, open_idx: int) -> tuple[str, int] | None:
@@ -55,6 +90,151 @@ def _extract_balanced_braces(s: str, open_idx: int) -> tuple[str, int] | None:
             if depth == 0 and start is not None:
                 return s[start:i], i + 1
     return None
+
+
+def _strip_markdown_wrappers(s: str) -> str:
+    s = s.strip()
+    if not s:
+        return s
+    s = s.strip("`")
+    for _ in range(2):
+        if s.startswith("**") and s.endswith("**") and len(s) > 4:
+            s = s[2:-2].strip()
+        if s.startswith("__") and s.endswith("__") and len(s) > 4:
+            s = s[2:-2].strip()
+    return s.strip("*_")
+
+
+def _extract_last_tex_command_arg(s: str, command: str) -> str | None:
+    needle = "\\" + command
+    last = None
+    i = 0
+    while True:
+        j = s.find(needle, i)
+        if j < 0:
+            break
+        k = j + len(needle)
+        while k < len(s) and s[k].isspace():
+            k += 1
+        if k < len(s) and s[k] == "{":
+            res = _extract_balanced_braces(s, k)
+            if res:
+                inner, end = res
+                last = inner
+                i = end
+                continue
+        i = k + 1
+    return last
+
+
+def _replace_tex_command_with_arg(s: str, command: str) -> str:
+    needle = "\\" + command
+    out: list[str] = []
+    i = 0
+    while True:
+        j = s.find(needle, i)
+        if j < 0:
+            break
+        out.append(s[i:j])
+        k = j + len(needle)
+        while k < len(s) and s[k].isspace():
+            k += 1
+        if k < len(s) and s[k] == "{":
+            res = _extract_balanced_braces(s, k)
+            if res:
+                inner, end = res
+                out.append(inner)
+                i = end
+                continue
+        i = k
+    out.append(s[i:])
+    return "".join(out)
+
+
+def _extract_last_math_segment(s: str) -> str | None:
+    boxed = _extract_last_tex_command_arg(s, "boxed")
+    if boxed:
+        return boxed
+    matches: list[tuple[int, str]] = []
+    for pat in (_RE_LATEX_INLINE_ANY, _RE_LATEX_BRACKETS_ANY, _RE_LATEX_DOLLAR_ANY):
+        for m in pat.finditer(s):
+            matches.append((m.start(), m.group(1)))
+    if matches:
+        matches.sort(key=lambda x: x[0])
+        return matches[-1][1]
+    return None
+
+
+def _fix_fracs(string: str) -> str:
+    substrs = string.split("\\frac")
+    new_str = substrs[0]
+    if len(substrs) > 1:
+        substrs = substrs[1:]
+        for substr in substrs:
+            new_str += "\\frac"
+            if len(substr) > 0 and substr[0] == "{":
+                new_str += substr
+            else:
+                if len(substr) < 2:
+                    return string
+                a = substr[0]
+                b = substr[1]
+                if b != "{":
+                    post_substr = substr[2:]
+                    new_str += "{" + a + "}{" + b + "}" + post_substr
+                else:
+                    post_substr = substr[2:]
+                    new_str += "{" + a + "}" + b + post_substr
+    return new_str
+
+
+def _fix_sqrt(string: str) -> str:
+    return re.sub(r"\\sqrt(\w+)", r"\\sqrt{\1}", string)
+
+
+def _pick_last_math_token(s: str) -> str:
+    tokens = [t.strip(".,;:") for t in s.split() if t.strip(".,;:")]
+    if not tokens:
+        return s
+
+    def is_math_token(tok: str) -> bool:
+        if re.search(r"\d", tok):
+            return True
+        if "\\" in tok:
+            return True
+        if re.search(r"[\\^_*/()+-]", tok):
+            return True
+        if re.search(r"(?i)\\b(pi|sqrt|frac)\\b", tok):
+            return True
+        return False
+
+    last_idx = None
+    for i, tok in enumerate(tokens):
+        if is_math_token(tok):
+            last_idx = i
+
+    if last_idx is None:
+        return tokens[-1]
+
+    cand = tokens[last_idx]
+    if last_idx > 0:
+        prev = tokens[last_idx - 1]
+        if re.fullmatch(r"[-+]?\\d+(?:\\.\\d+)?", prev) and re.match(r"(?:\\\\?sqrt|sqrt)\\b", cand):
+            cand = prev + cand
+    return cand
+
+
+def _pick_text_answer(s: str) -> str:
+    tokens = [t.strip(".,;:") for t in s.split() if t.strip(".,;:")]
+    if not tokens:
+        return s
+    lower_tokens = [t.lower() for t in tokens]
+    for i in range(len(tokens) - 1, -1, -1):
+        if lower_tokens[i] in {"is", "are", "was", "were", "be"} and i + 1 < len(tokens):
+            return tokens[i + 1]
+    while tokens and tokens[0].lower() in {"the", "a", "an", "answer", "final"}:
+        tokens = tokens[1:]
+    return tokens[0] if tokens else s
 
 
 def _is_atomic_expr(s: str) -> bool:
@@ -136,12 +316,33 @@ def normalize_math_answer(s: str) -> str:
     if not s:
         return s
 
-    # Strip common math wrappers.
+    s = s.replace("\n", " ").strip()
+    s = _strip_markdown_wrappers(s)
+    s = s.replace("\u2212", "-")
+    s = s.replace("\u221a", "\\sqrt")
+
+    # Prefer explicit math segments when present.
+    segment = _extract_last_math_segment(s)
+    if segment:
+        s = segment.strip()
+
+    # Strip common math wrappers when the whole string is wrapped.
     for pat in (_RE_LATEX_INLINE_MATH, _RE_LATEX_PARENS_MATH, _RE_LATEX_BRACKETS_MATH):
         m = pat.match(s)
         if m:
             s = m.group(1).strip()
             break
+
+    # Replace common text commands early to avoid tokenization issues.
+    for cmd in ("text", "mathrm", "mathbf", "mbox"):
+        s = _replace_tex_command_with_arg(s, cmd)
+
+    # For sentence-like answers, reduce to a likely answer token.
+    if " " in s and _SENTENCE_WORD_RE.search(s):
+        if re.search(r"\d", s) or re.search(r"[\\^_*/()+-]", s) or "\\" in s:
+            s = _pick_last_math_token(s)
+        else:
+            s = _pick_text_answer(s)
 
     # Drop common LaTeX spacing and sizing commands.
     s = re.sub(r"\\(left|right)\b", "", s)
@@ -157,7 +358,37 @@ def normalize_math_answer(s: str) -> str:
     # Normalize fraction command variants.
     s = s.replace("\\dfrac", "\\frac").replace("\\tfrac", "\\frac")
 
-    # Remove remaining whitespace early (post replacements), but keep newlines out.
+    # Remove inline math delimiters.
+    s = s.replace("\\(", "").replace("\\)", "").replace("\\[", "").replace("\\]", "")
+    s = s.replace("\\$", "").replace("$", "")
+
+    # Remove degree markers and percent signs.
+    s = s.replace("^{\\circ}", "").replace("^\\circ", "").replace("\\circ", "")
+    s = s.replace("\\%", "").replace("%", "")
+
+    # Drop obvious answer prefixes like "x=" or "DE=".
+    if "=" in s:
+        parts = s.split("=")
+        if len(parts) == 2 and len(parts[0].strip()) <= 2:
+            s = parts[1].strip()
+
+    # If this is a sentence with numbers and no math operators, keep the last number.
+    if re.search(r"\d", s) and not re.search(r"[\\^_*/()+-]", s) and "\\" not in s:
+        nums = re.findall(r"[-+]?\d*\.?\d+(?:/\d+)?", s)
+        if nums:
+            s = nums[-1]
+
+    # Strip trailing unit words when the answer is numeric-like.
+    if re.search(r"\d", s):
+        unit_words = "|".join(sorted(_UNIT_WORDS, key=len, reverse=True))
+        s = re.sub(r"(?i)(?:\s+(?:" + unit_words + r"))+\s*$", "", s).strip()
+        if _UNIT_SUFFIXES_NOSPACE:
+            unit_suffix = "|".join(_UNIT_SUFFIXES_NOSPACE)
+            s = re.sub(r"(?i)(" + unit_suffix + r")$", "", s).strip()
+
+    s = _fix_sqrt(_fix_fracs(s))
+
+    # Remove remaining whitespace (post replacements), but keep newlines out.
     s = re.sub(r"\s+", "", s)
 
     # Remove outer braces.
@@ -183,4 +414,7 @@ def normalize_math_answer(s: str) -> str:
 
     # Final cleanup: remove redundant braces.
     s = s.replace("{", "").replace("}", "")
-    return s.strip()
+    s = s.strip()
+    if re.fullmatch(r"[A-Za-z]+", s):
+        return s.lower()
+    return s

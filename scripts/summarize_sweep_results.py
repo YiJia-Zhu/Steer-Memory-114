@@ -13,12 +13,15 @@ Typical usage:
       - python scripts/summarize_sweep_results.py --run-name gs_online_math500_deepseek_1p5b --contains 20260114_120000
   - 指定输出路径：
       - python scripts/summarize_sweep_results.py --run-name ... --out /tmp/summary.csv
+  - 汇总所有 grid sweep 到一个 CSV：
+      - python scripts/summarize_sweep_results.py --all-grids
       
 Optional filtering:
   python scripts/summarize_sweep_results.py --run-name gs_online_math500_deepseek_1p5b --contains 20260114_120000
 
 Outputs:
   - Default: outputs/_grid/<run_name>/grid_summary.csv
+  - With --all-grids: outputs/_grid/all_grid_summary.csv
 """
 
 from __future__ import annotations
@@ -443,6 +446,24 @@ def _iter_run_ids(run_root: Path) -> list[str]:
     return out
 
 
+def _iter_run_names(outputs_root: Path, *, only_grids: bool) -> list[str]:
+    if not outputs_root.is_dir():
+        return []
+    out: list[str] = []
+    for p in sorted(outputs_root.iterdir()):
+        if not p.is_dir():
+            continue
+        name = p.name
+        if name.startswith("_"):
+            continue
+        if only_grids:
+            low = name.lower()
+            if not (low.startswith("grid_") or low.startswith("gs_") or low.startswith("grid-") or low.startswith("gs-")):
+                continue
+        out.append(name)
+    return out
+
+
 def _write_csv(path: Path, rows: list[Row]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames: list[str] = []
@@ -464,7 +485,8 @@ def _write_csv(path: Path, rows: list[Row]) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--outputs-root", type=str, default="outputs")
-    ap.add_argument("--run-name", type=str, required=True)
+    ap.add_argument("--run-name", type=str, default=None, help="Single run_name under outputs/ (required unless --all-grids).")
+    ap.add_argument("--all-grids", action="store_true", help="Aggregate all grid/gs sweep folders under outputs/.")
     ap.add_argument("--contains", type=str, default=None, help="Only include run_id containing this substring.")
     ap.add_argument(
         "--out",
@@ -475,28 +497,43 @@ def main() -> None:
     args = ap.parse_args()
 
     outputs_root = Path(args.outputs_root)
-    run_name = str(args.run_name)
+    if args.all_grids and args.run_name:
+        ap.error("--all-grids cannot be combined with --run-name")
+    if not args.all_grids and not args.run_name:
+        ap.error("Either --run-name or --all-grids is required")
 
-    run_root = outputs_root / run_name
-    run_ids = _iter_run_ids(run_root)
-    if args.contains:
-        needle = str(args.contains)
-        run_ids = [rid for rid in run_ids if needle in rid]
+    if args.all_grids:
+        run_names = _iter_run_names(outputs_root, only_grids=True)
+    else:
+        run_names = [str(args.run_name)]
 
     rows: list[Row] = []
-    for rid in run_ids:
-        rows.append(_build_row(outputs_root=outputs_root, run_name=run_name, run_id=rid))
+    for run_name in run_names:
+        run_root = outputs_root / run_name
+        run_ids = _iter_run_ids(run_root)
+        if args.contains:
+            needle = str(args.contains)
+            run_ids = [rid for rid in run_ids if needle in rid]
+        for rid in run_ids:
+            rows.append(_build_row(outputs_root=outputs_root, run_name=run_name, run_id=rid))
 
     def _sort_key(r: Row) -> tuple[int, float, str]:
         status = str(r.data.get("status") or "")
         ok_rank = 0 if status == "ok" else 1
         acc = r.data.get("acc")
         acc_v = float(acc) if isinstance(acc, (int, float)) else -1.0
-        return (ok_rank, -acc_v, str(r.data.get("run_id") or ""))
+        run_name = str(r.data.get("run_name") or "")
+        run_id = str(r.data.get("run_id") or "")
+        return (ok_rank, -acc_v, run_name, run_id)
 
     rows.sort(key=_sort_key)
 
-    out_path = Path(args.out) if args.out else (outputs_root / "_grid" / run_name / "grid_summary.csv")
+    if args.out:
+        out_path = Path(args.out)
+    elif args.all_grids:
+        out_path = outputs_root / "_grid" / "all_grid_summary.csv"
+    else:
+        out_path = outputs_root / "_grid" / str(args.run_name) / "grid_summary.csv"
     _write_csv(out_path, rows)
 
     # Print a tiny hint for quick selection.
@@ -504,7 +541,7 @@ def main() -> None:
     if best is not None:
         print(f"[ok] wrote: {out_path}")
         print(
-            f"[best] run_id={best.data.get('run_id')} acc={best.data.get('acc')} "
+            f"[best] run_name={best.data.get('run_name')} run_id={best.data.get('run_id')} acc={best.data.get('acc')} "
             f"T_max={best.data.get('T_max')} dir={best.data.get('run_dir')}"
         )
     else:
